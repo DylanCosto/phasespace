@@ -1,0 +1,19 @@
+##fileformat=VCFv4.3
+##source=PhaseSpaceSyntheticDemo
+##contig=<ID=chrDemo,length=400>
+##ALT=<ID=NON_REF,Description="Any other allele">
+##INFO=<ID=END,Number=1,Type=Integer,Description="Inclusive block end">
+##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
+##FORMAT=<ID=GQ,Number=1,Type=Integer,Description="Genotype quality">
+##FORMAT=<ID=DP,Number=1,Type=Integer,Description="Depth">
+##FORMAT=<ID=MIN_DP,Number=1,Type=Integer,Description="Minimum block depth">
+##FORMAT=<ID=PS,Number=1,Type=Integer,Description="Phase set">
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	SYNTHETIC
+chrDemo	101	.	A	<NON_REF>	.	PASS	END=121	GT:GQ:DP:MIN_DP	0/0:60:30:28
+chrDemo	122	stop_A	C	T	60	PASS	.	GT:GQ:DP	0/1:60:30
+chrDemo	123	.	A	<NON_REF>	.	PASS	END=136	GT:GQ:DP:MIN_DP	0/0:60:30:28
+chrDemo	201	.	G	<NON_REF>	.	PASS	END=225	GT:GQ:DP:MIN_DP	0/0:60:30:28
+chrDemo	226	stop_B	G	A	60	PASS	.	GT:GQ:DP	0/1:60:30
+chrDemo	227	.	G	<NON_REF>	.	PASS	END=230	GT:GQ:DP:MIN_DP	0/0:60:30:28
+chrDemo	301	.	G	<NON_REF>	.	PASS	END=310	GT:GQ:DP:MIN_DP	0/0:60:30:28
+chrDemo	317	.	C	<NON_REF>	.	PASS	END=330	GT:GQ:DP:MIN_DP	0/0:60:30:28

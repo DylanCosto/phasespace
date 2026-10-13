@@ -1,0 +1,13 @@
+.venv/
+.env-phasespace/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+reports/
+demo-inputs/
+examples/synthetic/*.gz
+examples/synthetic/*.tbi
+.DS_Store

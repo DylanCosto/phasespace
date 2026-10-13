@@ -1,0 +1,3 @@
+chrDemo	PhaseSpace	CDS	101	136	.	+	0	gene_id "DEMO1"; transcript_id "DEMO1.1"; gene_name "DEMO1";
+chrDemo	PhaseSpace	CDS	201	230	.	+	0	gene_id "DEMO1"; transcript_id "DEMO1.1"; gene_name "DEMO1";
+chrDemo	PhaseSpace	CDS	301	330	.	+	0	gene_id "DEMO1"; transcript_id "DEMO1.1"; gene_name "DEMO1";
