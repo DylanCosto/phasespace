@@ -21,9 +21,17 @@
     return Array.from(groups.values());
   }
 
-  // Export the exact filtering implementation for an independent logic test.
+  function sharedProteinScale(scenarios, referenceLength) {
+    return scenarios.reduce(function (longest, scenario) {
+      return scenario.haplotypes.reduce(function (length, haplotype) {
+        return Math.max(length, haplotype.protein_length);
+      }, longest);
+    }, Math.max(1, referenceLength || 0));
+  }
+
+  // Export the exact report logic for independent tests.
   if (typeof module !== "undefined" && module.exports) {
-    module.exports = { filterScenarios: filterScenarios, groupScenarios: groupScenarios };
+    module.exports = { filterScenarios: filterScenarios, groupScenarios: groupScenarios, sharedProteinScale: sharedProteinScale };
   }
   if (typeof document === "undefined") return;
 
@@ -32,6 +40,7 @@
   const blocks = data.blocks || [];
   const scenarios = data.scenarios || [];
   const variants = data.variants || [];
+  const proteinScale = sharedProteinScale(scenarios, data.reference_protein_length);
   const variantLookup = new Map(variants.map(function (variant) { return [variant.id, variant]; }));
   const blockLookup = new Map(blocks.map(function (block) { return [block.id, block]; }));
   const state = { constraints: [], selectedId: scenarios.length ? scenarios[0].id : null, compatible: [] };
@@ -55,7 +64,7 @@
 
   function describeVariant(variant) {
     const alternate = (variant.alleles || []).filter(function (allele) { return allele !== variant.ref; });
-    return "c." + number(variant.cds_start + 1) + " · " + variant.ref + " → " + Array.from(new Set(alternate)).join(" / ");
+    return "CDS base " + number(variant.cds_start + 1) + " · genomic alleles " + variant.ref + " → " + Array.from(new Set(alternate)).join(" / ");
   }
 
   function renderEvidence() {
@@ -76,19 +85,20 @@
     const svg = document.createElementNS(ns, "svg");
     svg.setAttribute("viewBox", "0 0 1000 52");
     svg.setAttribute("class", "evidence-svg");
+    svg.setAttribute("preserveAspectRatio", "none");
     svg.setAttribute("role", "img");
-    svg.setAttribute("aria-label", "Coding evidence across " + transcript.contig + ":" + (start + 1) + "–" + end + ". Unknown intervals are hatched, reference calls teal, and variant calls ochre.");
+    svg.setAttribute("aria-label", "Coding evidence across " + transcript.contig + ":" + (start + 1) + "–" + end + ". Unknown intervals are hatched, reference calls blue-gray, and variant calls coral.");
     const defs = document.createElementNS(ns, "defs");
     const pattern = document.createElementNS(ns, "pattern");
     pattern.setAttribute("id", "unknown-hatch");
     pattern.setAttribute("width", "7"); pattern.setAttribute("height", "7"); pattern.setAttribute("patternUnits", "userSpaceOnUse");
     const patternBackground = document.createElementNS(ns, "rect");
-    patternBackground.setAttribute("width", "7"); patternBackground.setAttribute("height", "7"); patternBackground.setAttribute("fill", "#e4e9e3");
+    patternBackground.setAttribute("width", "7"); patternBackground.setAttribute("height", "7"); patternBackground.setAttribute("fill", "#f1f3f7");
     const stripe = document.createElementNS(ns, "path");
-    stripe.setAttribute("d", "M-1,1 L1,-1 M0,7 L7,0 M6,8 L8,6"); stripe.setAttribute("stroke", "#c7d2ca"); stripe.setAttribute("stroke-width", "2");
+    stripe.setAttribute("d", "M-1,1 L1,-1 M0,7 L7,0 M6,8 L8,6"); stripe.setAttribute("stroke", "#d5dce5"); stripe.setAttribute("stroke-width", "2");
     pattern.append(patternBackground, stripe); defs.append(pattern); svg.append(defs);
     const line = document.createElementNS(ns, "line");
-    line.setAttribute("x1", "0"); line.setAttribute("x2", "1000"); line.setAttribute("y1", "25"); line.setAttribute("y2", "25"); line.setAttribute("stroke", "#cdd8d0"); line.setAttribute("stroke-width", "2"); svg.append(line);
+    line.setAttribute("x1", "0"); line.setAttribute("x2", "1000"); line.setAttribute("y1", "25"); line.setAttribute("y2", "25"); line.setAttribute("stroke", "#d5dce5"); line.setAttribute("stroke-width", "2"); svg.append(line);
     function rectangle(a, b, status, detail) {
       const rect = document.createElementNS(ns, "rect");
       const x = Math.max(0, Math.min(1000, mapX(a)));
@@ -97,7 +107,7 @@
       rect.setAttribute("width", String(Math.min(1000 - x, Math.max(status === "variant" ? 3 : 1, mapX(b) - x))));
       rect.setAttribute("height", "30");
       rect.setAttribute("rx", "2");
-      rect.setAttribute("fill", status === "reference" ? "#13786c" : status === "variant" ? "#b06b26" : "url(#unknown-hatch)");
+      rect.setAttribute("fill", status === "reference" ? "#6d8e92" : status === "variant" ? "#bc593d" : "url(#unknown-hatch)");
       const title = document.createElementNS(ns, "title");
       title.textContent = transcript.contig + ":" + number(a + 1) + "–" + number(b) + " · " + status + (detail ? " · " + detail : "");
       rect.append(title); svg.append(rect);
@@ -172,7 +182,7 @@
     heading.append(label, element("span", "copy-status" + (isReference ? " reference-identical" : ""), isReference ? "Reference-identical CDS" : "Altered CDS"));
     copy.append(heading);
     const description = element("div", "track-description");
-    description.append(element("span", "", "Coding variant map · reference coordinates"), element("span", "", number(haplotype.cds.length) + " nt"));
+    description.append(element("span", "", "Coding variants"), element("span", "", number(haplotype.cds.length) + " nt · reference CDS positions"));
     copy.append(description);
     const ribbon = element("div", "ribbon cds-ribbon");
     ribbon.setAttribute("role", "img");
@@ -195,7 +205,7 @@
     copy.append(ribbon, variantLabels);
     const protein = element("div", "protein-track");
     const proteinLabel = element("div", "track-description");
-    proteinLabel.append(element("span", "", "Predicted translation"), element("span", "", number(haplotype.protein_length) + " aa" + (haplotype.first_stop == null ? " · no stop in supplied CDS" : " · first stop at " + number(haplotype.first_stop))));
+    proteinLabel.append(element("span", "", "Protein"), element("span", "", number(haplotype.protein_length) + " aa" + (haplotype.first_stop == null ? " · no stop in CDS" : " · first stop at " + number(haplotype.first_stop))));
     const proteinRibbon = element("div", "ribbon");
     proteinRibbon.setAttribute("role", "img");
     proteinRibbon.setAttribute("aria-label", "Predicted translation of " + haplotype.protein_length + " amino acids" + (haplotype.first_stop == null ? " without a stop within supplied CDS" : "; first stop at position " + haplotype.first_stop));
@@ -216,7 +226,7 @@
     (haplotype.consequences || []).forEach(function (consequence) { consequences.append(element("li", "", String(consequence).replace(/_/g, " "))); });
     copy.append(consequences);
     const sequences = element("details", "sequence-details");
-    sequences.append(element("summary", "", "Inspect coding & protein sequences"));
+    sequences.append(element("summary", "", "View sequences"));
     const sequenceContent = element("div", "sequence-content");
     sequenceContent.append(element("h4", "", "CODING SEQUENCE · TRANSCRIPT ORIENTATION"), element("pre", "", haplotype.cds), element("h4", "", "PREDICTED TRANSLATION"), element("pre", "", haplotype.protein || "No translated amino acids before the first stop"));
     sequences.append(sequenceContent); copy.append(sequences);
@@ -234,10 +244,9 @@
     orientations.replaceChildren();
     blocks.forEach(function (block) { const pill = element("span", "orientation-pill", blockName(block.id) + " · orientation " + selected.orientations[block.id]); pill.title = block.label; orientations.append(pill); });
     if (!blocks.length) orientations.append(element("span", "orientation-pill", "No heterozygous phase blocks"));
-    const maxLength = Math.max.apply(null, [1, data.reference_protein_length || 0].concat(selected.haplotypes.map(function (haplotype) { return haplotype.protein_length; })));
     const tracks = byId("copy-tracks");
     tracks.replaceChildren();
-    selected.haplotypes.forEach(function (haplotype, copyIndex) { tracks.append(renderCopy(haplotype, copyIndex, maxLength)); });
+    selected.haplotypes.forEach(function (haplotype, copyIndex) { tracks.append(renderCopy(haplotype, copyIndex, proteinScale)); });
     byId("outcome-options").querySelectorAll("button").forEach(function (button) { button.setAttribute("aria-pressed", String(button.dataset.outcomeKey === selected.outcome_key)); });
   }
 
@@ -259,7 +268,7 @@
     const select = byId("scenario-select");
     select.replaceChildren();
     state.compatible.forEach(function (scenario, index) {
-      select.append(option(scenario.id, "Arrangement " + (index + 1) + " of " + state.compatible.length + " · " + scenario.id));
+      select.append(option(scenario.id, "Arrangement " + (index + 1) + " of " + state.compatible.length));
     });
     if (!state.compatible.some(function (scenario) { return scenario.id === state.selectedId; })) state.selectedId = state.compatible.length ? state.compatible[0].id : null;
     const options = byId("outcome-options");
@@ -306,6 +315,7 @@
   if (blocks.length > 1) byId("block-b").value = String(blocks[1].id);
   else {
     byId("constraint-form").hidden = true;
+    byId("constraint-help").parentElement.open = true;
     text("constraint-help", blocks.length ? "One phase block is already internally oriented. Swapping both copy labels does not create a different coding outcome." : "No heterozygous phase blocks are available to constrain. Both copies still depend on the supplied evidence.");
   }
   function validatePair() { byId("add-constraint").disabled = byId("block-a").value === byId("block-b").value; }

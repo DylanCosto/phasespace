@@ -93,3 +93,30 @@ assert.equal(core.filterScenarios([{id:'fixed',orientations:{},outcome_key:'fixe
 assert.equal(JSON.stringify(scenarios), snapshot);
 """
     subprocess.run(["node", "-e", test, str(javascript)], check=True, capture_output=True, text=True)
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="Node is needed for browser logic test")
+def test_protein_scale_stays_comparable_across_arrangements():
+    javascript = Path(__file__).parents[1] / "src" / "phasespace" / "assets" / "report.js"
+    test = r"""
+const assert = require('node:assert/strict');
+const { sharedProteinScale } = require(process.argv[1]);
+const scenarios = [
+  { id: 'short', haplotypes: [{protein_length: 7}, {protein_length: 20}] },
+  { id: 'long', haplotypes: [{protein_length: 31}, {protein_length: 45}] },
+  { id: 'empty-translation', haplotypes: [{protein_length: 0}, {protein_length: 0}] }
+];
+const snapshot = JSON.stringify(scenarios);
+// A longer product in another arrangement must set the scale for every copy.
+assert.equal(sharedProteinScale(scenarios, 31), 45);
+assert.equal(sharedProteinScale([...scenarios].reverse(), 31), 45);
+// Reference length remains the lower bound when all predictions are shorter.
+assert.equal(sharedProteinScale(scenarios, 60), 60);
+assert.equal(sharedProteinScale([], 31), 31);
+// Zero-length and absent translations still need a nonzero plotting denominator.
+assert.equal(sharedProteinScale([], 0), 1);
+assert.equal(sharedProteinScale([], undefined), 1);
+assert.equal(sharedProteinScale([scenarios[2]], 0), 1);
+assert.equal(JSON.stringify(scenarios), snapshot);
+"""
+    subprocess.run(["node", "-e", test, str(javascript)], check=True, capture_output=True, text=True)
