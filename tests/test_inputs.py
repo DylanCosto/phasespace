@@ -268,7 +268,7 @@ def ref_block(pos, end, base="A"):
 
 
 def test_gvcf_reference_block_through_deleted_bases_is_not_a_conflict(files):
-    # HaplotypeCaller and DeepVariant resume reference blocks inside a het deletion.
+    # Some gVCF writers resume reference blocks inside a heterozygous deletion.
     locus = load(files, [ref_block(13, 30), row(31, "CCC", "C"), ref_block(32, 39, "C")])
     assert [v.cds_alleles for v in locus.variants] == [("CCC", "C")]
     spans = [(e.start, e.end, e.status) for e in locus.evidence]
@@ -381,3 +381,87 @@ def test_unselected_selenocysteine_feature_does_not_block_transcript(files):
     reference, annotation, write = files
     annotation.write_text(annotation.read_text() + 'chr1\ttest\tSelenocysteine\t31\t33\t.\t+\t.\ttranscript_id "OTHER";\n')
     assert load_locus(write([]), reference, annotation, "TX").transcript.id == "TX"
+
+
+def _custom(files, sequence, annotation_text):
+    reference, annotation, write = files
+    reference.write_text(">chr1\n" + sequence.ljust(90, "A") + "\n")
+    Path(str(reference) + ".fai").unlink()
+    pysam.faidx(str(reference))
+    annotation.write_text(annotation_text)
+    return reference, annotation, write([])
+
+
+def gtf(feature, start, end, strand="+", transcript="TX", phase="0"):
+    return f'chr1\ttest\t{feature}\t{start}\t{end}\t.\t{strand}\t{phase}\tgene_id "G"; transcript_id "{transcript}";\n'
+
+
+def test_gtf_stop_codon_is_joined_to_the_cds(files):
+    sequence = "A" * 12 + "ATGAAA" + "A" * 12 + "CCCGGGTAA"
+    reference, annotation, vcf = _custom(files, sequence, gtf("CDS", 13, 18) + gtf("CDS", 31, 36) + gtf("stop_codon", 37, 39))
+    transcript = load_locus(vcf, reference, annotation, "TX").transcript
+    assert transcript.cds_intervals == ((12, 18), (30, 39))
+    assert transcript.reference_cds == "ATGAAACCCGGGTAA"
+
+
+def test_gtf_stop_codon_split_across_exons(files):
+    sequence = "A" * 10 + "ATGAAAT" + "C" * 10 + "AAG"
+    reference, annotation, vcf = _custom(files, sequence, gtf("CDS", 11, 16) + gtf("stop_codon", 17, 17) + gtf("stop_codon", 28, 29, phase="2"))
+    transcript = load_locus(vcf, reference, annotation, "TX").transcript
+    assert transcript.cds_intervals == ((10, 17), (27, 29))
+    assert transcript.reference_cds == "ATGAAATAA"
+
+
+def test_reverse_strand_gtf_stop_codon_precedes_the_cds_genomically(files):
+    sequence = "A" * 10 + "TTACCCCAT"
+    reference, annotation, vcf = _custom(files, sequence, gtf("CDS", 14, 19, "-") + gtf("stop_codon", 11, 13, "-"))
+    transcript = load_locus(vcf, reference, annotation, "TX").transcript
+    assert transcript.cds_intervals == ((10, 19),)
+    assert transcript.reference_cds == "ATGGGGTAA"
+
+
+def test_stop_codon_already_inside_cds_is_not_added_twice(files):
+    reference, annotation, write = files
+    annotation.write_text(annotation.read_text() + gtf("stop_codon", 37, 39))
+    assert load_locus(write([]), reference, annotation, "TX").transcript.reference_cds == "ATGAAACCCGGGTAA"
+
+
+@pytest.mark.parametrize("requested", ["NM_000001.2", "NM_000001", "rna-NM_000001.2"])
+def test_refseq_gff3_transcript_resolves_from_its_accession(files, requested):
+    reference, annotation, write = files
+    annotation.write_text(
+        "##gff-version 3\n"
+        "chr1\tRefSeq\tgene\t1\t90\t.\t+\t.\tID=gene-G;Name=G\n"
+        "chr1\tRefSeq\tmRNA\t1\t90\t.\t+\t.\tID=rna-NM_000001.2;Parent=gene-G;transcript_id=NM_000001.2\n"
+        "chr1\tRefSeq\tCDS\t13\t18\t.\t+\t0\tID=cds-NP_1;Parent=rna-NM_000001.2\n"
+        "chr1\tRefSeq\tCDS\t31\t39\t.\t+\t0\tID=cds-NP_1;Parent=rna-NM_000001.2\n"
+    )
+    locus = load_locus(write([]), reference, annotation, requested)
+    assert locus.transcript.gene == "G"
+    assert locus.transcript.reference_cds == "ATGAAACCCGGGTAA"
+
+
+def test_ensembl_gff3_versioned_id_uses_the_version_attribute(files):
+    reference, annotation, write = files
+    annotation.write_text(
+        "chr1\tens\tmRNA\t1\t90\t.\t+\t.\tID=transcript:ENST1;transcript_id=ENST1;version=4\n"
+        "chr1\tens\tCDS\t13\t18\t.\t+\t0\tParent=transcript:ENST1\n"
+        "chr1\tens\tCDS\t31\t39\t.\t+\t0\tParent=transcript:ENST1\n"
+    )
+    for requested in ("ENST1", "ENST1.4", "transcript:ENST1"):
+        assert load_locus(write([]), reference, annotation, requested).transcript.reference_cds == "ATGAAACCCGGGTAA"
+    with pytest.raises(PhaseSpaceError, match="No CDS features"):
+        load_locus(write([]), reference, annotation, "ENST1.3")
+
+
+def test_unversioned_id_matching_several_versions_is_rejected(files):
+    reference, annotation, write = files
+    annotation.write_text(
+        'chr1\ttest\ttranscript\t1\t90\t.\t+\t.\ttranscript_id "TX.1";\n'
+        'chr1\ttest\ttranscript\t1\t90\t.\t+\t.\ttranscript_id "TX.2";\n'
+        + gtf("CDS", 13, 18, transcript="TX.1") + gtf("CDS", 31, 39, transcript="TX.1")
+        + gtf("CDS", 13, 18, transcript="TX.2") + gtf("CDS", 31, 39, transcript="TX.2")
+    )
+    with pytest.raises(PhaseSpaceError, match="several annotated versions"):
+        load_locus(write([]), reference, annotation, "TX")
+    assert load_locus(write([]), reference, annotation, "TX.2").transcript.id == "TX.2"

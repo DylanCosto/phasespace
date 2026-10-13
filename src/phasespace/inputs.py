@@ -42,9 +42,23 @@ def _attributes(value: str) -> dict[str, str]:
     return result
 
 
+_VERSION = re.compile(r"\.\d+$")
+
+
 def _read_annotation(path: Path, transcript_id: str) -> tuple[str, str, str, tuple[tuple[int, int], ...]]:
+    """Locate one transcript's coding intervals in a GTF or GFF3 file.
+
+    The transcript may be named by its exact ID, by a GFF3 feature ID such as
+    ``transcript:ENST…`` or ``rna-NM_…``, by ``transcript_id`` with or without
+    a separate ``version`` attribute, or without a version when exactly one
+    annotated version exists. GTF ``stop_codon`` features are joined to the CDS
+    because GTF excludes the terminal stop codon from CDS features.
+    """
+    base = _VERSION.sub("", transcript_id)
     features: dict[str, dict[str, str]] = {}
-    selected: list[tuple[str, int, int, str, int, dict[str, str]]] = []
+    aliases = {transcript_id}
+    unversioned: dict[str, tuple[set[str], dict[str, str]]] = {}
+    rows: list[tuple[list[str], dict[str, str], set[str], int]] = []
     opener = gzip.open if str(path).endswith(".gz") else open
     try:
         with opener(path, "rt") as handle:
@@ -52,6 +66,11 @@ def _read_annotation(path: Path, transcript_id: str) -> tuple[str, str, str, tup
                 if line.startswith("##FASTA"):
                     break
                 if not line.strip() or line.startswith("#"):
+                    continue
+                # Almost every line belongs to another transcript. Skip those
+                # before splitting and parsing attributes; gene lines are kept
+                # to resolve the transcript's gene name.
+                if base not in line and "\tgene\t" not in line and "\tpseudogene\t" not in line:
                     continue
                 fields = line.rstrip("\n").split("\t")
                 if len(fields) != 9:
@@ -61,33 +80,61 @@ def _read_annotation(path: Path, transcript_id: str) -> tuple[str, str, str, tup
                 # exon/CDS feature IDs can otherwise dominate annotation memory.
                 if "ID" in attrs and (fields[2] in ("gene", "pseudogene") or attrs["ID"] == transcript_id):
                     features[attrs["ID"]] = attrs
-                if fields[2] in ("transcript", "mRNA") and attrs.get("transcript_id") == transcript_id:
-                    features[transcript_id] = attrs
-                parents = attrs.get("transcript_id", attrs.get("Parent", "")).split(",")
-                if transcript_id in parents and fields[2].lower() == "selenocysteine":
-                    raise PhaseSpaceError(f"Transcript {transcript_id!r} has a Selenocysteine feature; translation exceptions are unsupported under the standard genetic code model.")
-                if fields[2] != "CDS" or transcript_id not in parents:
-                    continue
-                try:
-                    start, end = int(fields[3]) - 1, int(fields[4])
-                    phase = int(fields[7])
-                except ValueError as exc:
-                    raise PhaseSpaceError(f"CDS line {line_number} has invalid coordinates or missing numeric phase.") from exc
-                if start < 0 or end <= start or phase not in (0, 1, 2):
-                    raise PhaseSpaceError(f"CDS line {line_number} has invalid coordinates or phase.")
-                if fields[6] not in ("+", "-"):
-                    raise PhaseSpaceError(f"CDS line {line_number} must specify + or - strand.")
-                selected.append((fields[0], start, end, fields[6], phase, attrs))
+                if fields[2] in ("transcript", "mRNA"):
+                    names = {attrs.get("ID"), attrs.get("transcript_id")}
+                    if attrs.get("transcript_id") and attrs.get("version"):
+                        names.add(f"{attrs['transcript_id']}.{attrs['version']}")
+                    names.discard(None)
+                    if transcript_id in names:
+                        aliases.update(names)
+                        features[transcript_id] = attrs
+                    elif base == transcript_id:
+                        for name in names:
+                            if _VERSION.sub("", name) == transcript_id:
+                                unversioned[name] = (names, attrs)
+                if fields[2] in ("CDS", "stop_codon") or fields[2].lower() == "selenocysteine":
+                    parents = set(attrs.get("transcript_id", attrs.get("Parent", "")).split(","))
+                    if base in "".join(parents):
+                        rows.append((fields, attrs, parents, line_number))
     except (OSError, UnicodeError) as exc:
         raise PhaseSpaceError(f"Cannot read annotation {path}: {exc}") from exc
+    if not any(fields[2] == "CDS" and parents & aliases for fields, _, parents, _ in rows):
+        # A versionless request matches a versioned ID only when unambiguous.
+        versions = sorted({name for name in unversioned if not name.startswith(("transcript:", "rna-"))} or unversioned)
+        if len(versions) > 1:
+            raise PhaseSpaceError(f"Transcript {transcript_id!r} matches several annotated versions ({', '.join(versions)}); give the exact versioned ID.")
+        if versions:
+            names, attrs = unversioned[versions[0]]
+            aliases.update(names)
+            features[transcript_id] = attrs
+    selected: list[tuple[str, int, int, str, int, dict[str, str]]] = []
+    stops: list[tuple[str, int, int, str]] = []
+    for fields, attrs, parents, line_number in rows:
+        if not parents & aliases:
+            continue
+        if fields[2].lower() == "selenocysteine":
+            raise PhaseSpaceError(f"Transcript {transcript_id!r} has a Selenocysteine feature; translation exceptions are unsupported under the standard genetic code model.")
+        try:
+            start, end = int(fields[3]) - 1, int(fields[4])
+            phase = int(fields[7]) if fields[2] == "CDS" else 0
+        except ValueError as exc:
+            raise PhaseSpaceError(f"CDS line {line_number} has invalid coordinates or missing numeric phase.") from exc
+        if start < 0 or end <= start or phase not in (0, 1, 2):
+            raise PhaseSpaceError(f"CDS line {line_number} has invalid coordinates or phase.")
+        if fields[6] not in ("+", "-"):
+            raise PhaseSpaceError(f"CDS line {line_number} must specify + or - strand.")
+        if fields[2] == "CDS":
+            selected.append((fields[0], start, end, fields[6], phase, attrs))
+        else:
+            stops.append((fields[0], start, end, fields[6]))
     if not selected:
-        raise PhaseSpaceError(f"No CDS features found for transcript {transcript_id!r}; use the exact transcript_id or GFF3 Parent identifier.")
+        raise PhaseSpaceError(f"No CDS features found for transcript {transcript_id!r}; use its transcript ID as written in the annotation (versioned or not), or its GFF3 ID.")
     if len({row[0] for row in selected}) != 1 or len({row[3] for row in selected}) != 1:
         raise PhaseSpaceError("A transcript must have CDS features on one contig and one strand.")
     selected.sort(key=lambda row: row[1])
     if any(left[2] > right[1] for left, right in zip(selected, selected[1:])):
         raise PhaseSpaceError("Overlapping or duplicate CDS annotation intervals are unsupported.")
-    strand = selected[0][3]
+    contig, strand = selected[0][0], selected[0][3]
     ordered = selected if strand == "+" else list(reversed(selected))
     total = 0
     for index, row in enumerate(ordered):
@@ -98,6 +145,22 @@ def _read_annotation(path: Path, transcript_id: str) -> tuple[str, str, str, tup
         total += row[2] - row[1]
     if total % 3:
         raise PhaseSpaceError("The joined CDS length must be divisible by three; partial CDS models are unsupported.")
+    intervals = [[row[1], row[2]] for row in selected]
+    for stop_contig, left, right, stop_strand in sorted(stops, key=lambda stop: stop[1]):
+        if stop_contig != contig or stop_strand != strand:
+            raise PhaseSpaceError("A transcript's stop_codon must be on the same contig and strand as its CDS.")
+        if any(start <= left and right <= end for start, end in intervals):
+            continue  # Already inside the CDS, as in GFF3.
+        adjacent = next((interval for interval in intervals if (interval[1] == left if strand == "+" else interval[0] == right)), None)
+        if adjacent is not None:
+            adjacent[0], adjacent[1] = min(adjacent[0], left), max(adjacent[1], right)
+        else:
+            intervals.append([left, right])  # A stop codon split across exons.
+    intervals.sort()
+    if any(left[1] > right[0] for left, right in zip(intervals, intervals[1:])):
+        raise PhaseSpaceError("The annotated stop_codon overlaps the CDS in an unsupported way.")
+    if sum(end - start for start, end in intervals) % 3:
+        raise PhaseSpaceError("The joined CDS and stop codon length must be divisible by three.")
     attrs = ordered[0][5]
     transcript_attrs = features.get(transcript_id, {})
     for attributes in [transcript_attrs, *(row[5] for row in selected)]:
@@ -109,7 +172,7 @@ def _read_annotation(path: Path, transcript_id: str) -> tuple[str, str, str, tup
     gene_id = attrs.get("gene_id") or attrs.get("gene") or transcript_attrs.get("Parent", "").split(",")[0]
     gene_attrs = features.get(gene_id, {})
     gene = attrs.get("gene_name") or gene_attrs.get("Name") or gene_id or transcript_id
-    return selected[0][0], strand, gene, tuple((row[1], row[2]) for row in selected)
+    return contig, strand, gene, tuple((start, end) for start, end in intervals)
 
 
 def _clips(start: int, end: int, intervals: tuple[tuple[int, int], ...]) -> Iterable[tuple[int, int]]:
@@ -203,8 +266,8 @@ def _deleted_tail(start: int, ref: str, alleles: Iterable[str]) -> tuple[int, in
 def _without_deleted_tails(raw: list[Evidence], tails: list[tuple[int, int]]) -> list[Evidence]:
     """Drop reference calls over bases that a called deletion removes.
 
-    gVCF writers (GATK HaplotypeCaller, DeepVariant) continue reference blocks
-    through the bases deleted on one copy. The deletion record already carries
+    Some gVCF writers continue reference blocks through the bases deleted on
+    one copy. (DeepVariant 1.10 does not; it starts the next block after them.) The deletion record already carries
     that span as variant evidence, so these blocks are not conflicting calls.
     The anchor base is kept: a reference block covering it remains a conflict.
     """

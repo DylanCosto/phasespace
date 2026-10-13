@@ -199,7 +199,13 @@ def _consequences(
         )
         if not retained_or_uncertain_stop:
             consequences.append("stop_gained")
-    if ref_first_stop is not None and aligned.get(ref_first_stop - 1, (None, None))[1] not in ("*", "X"):
+    # A premature stop ends translation before the reference stop is reached,
+    # so that stop is not reported as lost (common after a frameshift).
+    if (
+        ref_first_stop is not None
+        and "stop_gained" not in consequences
+        and aligned.get(ref_first_stop - 1, (None, None))[1] not in ("*", "X")
+    ):
         consequences.append("stop_lost")
     if reference[:3] == "ATG" and cds[:3] != "ATG" and "N" not in cds[:3]:
         consequences.append("start_lost")
