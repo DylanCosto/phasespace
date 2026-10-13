@@ -18,6 +18,8 @@ Edits are applied jointly to the coding sequence. Translation uses the standard 
 
 Reference evidence requires an explicit usable homozygous-reference call or reference block. A site absent from a variant-only VCF provides no reference evidence. Failed calls and missing quality fields remain unknown. Quality thresholds apply to the selected sample. A multi-base block needs `MIN_DP` for a positive depth threshold; its anchor `DP` is not used as evidence of minimum depth throughout the interval. A zero threshold explicitly waives that block-wide depth check.
 
+A called deletion carries variant evidence across its entire REF span. gVCF writers continue reference blocks through the bases a deletion removes from one copy, so reference calls over those removed bases are dropped instead of being reported as conflicting. The deletion's anchor base gets no such exemption: a passing reference call there remains a conflict. A `*` spanning-deletion record restates an upstream deletion. It adds no edit, and its own quality still decides whether its span is variant or unknown evidence.
+
 Evidence is partitioned over CDS intervals. Introns are not counted as missing coding evidence. Unknown evidence does not manufacture additional variants; the reported arrangements are conditional on the included calls. All sequence-level interpretations must be read with that qualification.
 
 ## Hypothesis controls

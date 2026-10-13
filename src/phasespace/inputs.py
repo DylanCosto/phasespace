@@ -187,6 +187,42 @@ def _project(start: int, end: int, ref: str, alleles: tuple[str, str], transcrip
     raise PhaseSpaceError(f"Variant at {transcript.contig}:{start + 1} crosses a CDS boundary. Only edits wholly inside one CDS segment are supported.")
 
 
+def _deleted_tail(start: int, ref: str, alleles: Iterable[str]) -> tuple[int, int] | None:
+    """Return the reference bases removed by the shortest called deletion allele."""
+    tails = []
+    for allele in alleles:
+        if len(allele) >= len(ref):
+            continue
+        prefix = 0
+        while prefix < len(allele) and ref[prefix] == allele[prefix]:
+            prefix += 1
+        tails.append(start + prefix)
+    return (min(tails), start + len(ref)) if tails else None
+
+
+def _without_deleted_tails(raw: list[Evidence], tails: list[tuple[int, int]]) -> list[Evidence]:
+    """Drop reference calls over bases that a called deletion removes.
+
+    gVCF writers (GATK HaplotypeCaller, DeepVariant) continue reference blocks
+    through the bases deleted on one copy. The deletion record already carries
+    that span as variant evidence, so these blocks are not conflicting calls.
+    The anchor base is kept: a reference block covering it remains a conflict.
+    """
+    result = []
+    for item in raw:
+        pieces = [(item.start, item.end)]
+        if item.status == "reference":
+            for tail_start, tail_end in tails:
+                pieces = [
+                    piece
+                    for left, right in pieces
+                    for piece in ((left, min(right, tail_start)), (max(left, tail_end), right))
+                    if piece[0] < piece[1]
+                ]
+        result.extend(Evidence(left, right, item.status, item.detail) for left, right in pieces)
+    return result
+
+
 def _merge_evidence(raw: list[Evidence], intervals: tuple[tuple[int, int], ...]) -> list[Evidence]:
     """Partition CDS, giving explicit uncertainty precedence over other records."""
     events: dict[int, list[tuple[str, str, int]]] = {}
@@ -245,6 +281,7 @@ def load_locus(vcf_path: str | Path, fasta_path: str | Path, annotation_path: st
     variants: list[Variant] = []
     raw_evidence: list[Evidence] = []
     called_spans: list[tuple[int, int]] = []
+    deleted_tails: list[tuple[int, int]] = []
     if not Path(str(fasta_path) + ".fai").is_file():
         raise PhaseSpaceError("Reference FASTA requires an existing .fai index; index it with samtools faidx before running PhaseSpace.")
     try:
@@ -315,6 +352,22 @@ def load_locus(vcf_path: str | Path, fasta_path: str | Path, annotation_path: st
                     has_alt = any(value > 0 for value in called)
                     if has_alt:
                         called_sequences = [(record.alleles[value] or "").upper() for value in called]
+                        if "*" in called_sequences:
+                            # A spanning-deletion allele restates a deletion already
+                            # called upstream. It adds no edit of its own.
+                            if set(called_sequences) - {"*", ref}:
+                                raise PhaseSpaceError(f"Unsupported called allele at {location}; a spanning deletion combined with another alternate allele cannot be resolved without read-level phasing.")
+                            if not any(left <= start and ref_end <= right for left, right in deleted_tails):
+                                raise PhaseSpaceError(f"Unsupported called allele at {location}; this spanning-deletion allele is not covered by a called upstream deletion.")
+                            clips = list(_clips(start, ref_end, intervals))
+                            reasons, _, _ = _quality(record, call, min_gq, min_dp, False)
+                            if reasons:
+                                detail = f"{location}: " + ", ".join(reasons)
+                                warnings.append("Excluded call; " + detail + ".")
+                                raw_evidence.extend(Evidence(left, right, "unknown", detail) for left, right in clips)
+                            else:
+                                raw_evidence.extend(Evidence(left, right, "variant", "Spanning deletion from an upstream call.") for left, right in clips)
+                            continue
                         if any(not _BASES.fullmatch(allele) for allele in called_sequences):
                             raise PhaseSpaceError(f"Unsupported called allele at {location}; symbolic, spanning-deletion and breakend alleles cannot be translated.")
                         # END on a sequence variant does not extend its replacement span.
@@ -324,6 +377,9 @@ def load_locus(vcf_path: str | Path, fasta_path: str | Path, annotation_path: st
                         if any(start < end and ref_end > left for left, end in called_spans):
                             raise PhaseSpaceError(f"Overlapping called coding variants at {location} are unsupported; normalize and resolve the records first.")
                         called_spans.append((start, ref_end))
+                        tail = _deleted_tail(start, ref, called_sequences)
+                        if tail is not None:
+                            deleted_tails.append(tail)
                         # Check unsupported boundary edits even when quality later fails.
                         known_alleles = tuple(called_sequences + [ref] * (2 - len(called_sequences)))
                         _project(start, ref_end, ref, known_alleles, transcript)
@@ -361,7 +417,7 @@ def load_locus(vcf_path: str | Path, fasta_path: str | Path, annotation_path: st
                     raise
                 raise PhaseSpaceError(f"Cannot interpret variant records: {exc}") from exc
     variants.sort(key=lambda variant: variant.cds_start)
-    evidence = _merge_evidence(raw_evidence, intervals)
+    evidence = _merge_evidence(_without_deleted_tails(raw_evidence, deleted_tails), intervals)
     if any(item.status == "unknown" for item in evidence):
         warnings.append("Some CDS bases lack usable genotype evidence. An unchanged predicted copy is reference-identical only with respect to included calls; additional variants may be unobserved.")
     return Locus(transcript, sample, variants, evidence, list(dict.fromkeys(warnings)), Path(vcf_path).name)

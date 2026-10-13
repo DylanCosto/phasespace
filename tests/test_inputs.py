@@ -263,6 +263,40 @@ def test_overlapping_passing_reference_and_variant_calls_rejected(files):
         load(files, [row(1, "A", "<NON_REF>", info="END=50", fmt="GT:GQ:DP:MIN_DP", values="0/0:50:12:10"), row(16, "A", "T")])
 
 
+def ref_block(pos, end, base="A"):
+    return row(pos, base, "<NON_REF>", info=f"END={end}", fmt="GT:GQ:DP:MIN_DP", values="0/0:50:12:10")
+
+
+def test_gvcf_reference_block_through_deleted_bases_is_not_a_conflict(files):
+    # HaplotypeCaller and DeepVariant resume reference blocks inside a het deletion.
+    locus = load(files, [ref_block(13, 30), row(31, "CCC", "C"), ref_block(32, 39, "C")])
+    assert [v.cds_alleles for v in locus.variants] == [("CCC", "C")]
+    spans = [(e.start, e.end, e.status) for e in locus.evidence]
+    assert spans == [(12, 18, "reference"), (30, 33, "variant"), (33, 39, "reference")]
+
+
+def test_reference_block_over_deletion_anchor_still_conflicts(files):
+    with pytest.raises(PhaseSpaceError, match="Conflicting passing reference and variant"):
+        load(files, [ref_block(13, 31), row(31, "CCC", "C"), ref_block(32, 39, "C")])
+
+
+def test_spanning_deletion_allele_covered_by_upstream_deletion_is_accepted(files):
+    locus = load(files, [row(31, "CCC", "C"), row(32, "C", "*"), row(33, "C", "*,<NON_REF>")])
+    assert [v.cds_alleles for v in locus.variants] == [("CCC", "C")]
+    variant_bases = {base for e in locus.evidence if e.status == "variant" for base in range(e.start, e.end)}
+    assert variant_bases == {30, 31, 32}
+
+
+def test_low_quality_spanning_deletion_record_stays_unknown(files):
+    locus = load(files, [row(31, "CCC", "C"), row(32, "C", "*", values="0/1:5:12")])
+    assert any(e.status == "unknown" and e.start == 31 for e in locus.evidence)
+
+
+def test_spanning_deletion_with_another_alternate_allele_is_rejected(files):
+    with pytest.raises(PhaseSpaceError, match="spanning deletion combined"):
+        load(files, [row(31, "CCC", "C"), row(32, "C", "*,T", gt="1/2")])
+
+
 def test_multi_base_block_anchor_dp_does_not_establish_minimum_depth(files):
     locus = load(files, [row(1, "A", "<NON_REF>", gt="0/0", info="END=50")])
     assert all(item.status == "unknown" for item in locus.evidence)
