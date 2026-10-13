@@ -242,3 +242,31 @@ assert.equal(core.changeLabel(v(8, 'A'), 'TA'), 'c.8_9insT');
 assert.equal(core.changeLabel(v(4, 'AC'), 'GT'), 'c.5_6delinsGT');
 """
     subprocess.run(["node", "-e", test, str(javascript)], check=True, capture_output=True, text=True)
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="Node is needed for browser logic test")
+def test_pin_labels_never_overlap_or_cross_stems():
+    javascript = Path(__file__).parents[1] / "src" / "phasespace" / "assets" / "report.js"
+    test = r"""
+const assert = require('node:assert/strict');
+const { placeLabels } = require(process.argv[1]);
+// A dense real-world cluster: 19 labels within 20% of the track, plus spread-out ones.
+const items = [];
+for (let i = 0; i < 19; i++) items.push({center: 200 + i * 9, width: 70});
+items.push({center: 50, width: 70}, {center: 900, width: 70});
+items.sort((a, b) => a.center - b.center);
+const spots = placeLabels(items, 1000, 3);
+const placed = spots.map((s, i) => ({...s, center: items[i].center, right: s.left + items[i].width})).filter(s => s.row >= 0);
+assert.ok(placed.every(s => s.row < 3));
+for (const a of placed) for (const b of placed) {
+  if (a === b) continue;
+  if (a.row === b.row) assert.ok(a.right + 6 <= b.left || b.right + 6 <= a.left, 'labels overlap');
+  if (a.row > b.row) assert.ok(a.center <= b.left - 3 || a.center >= b.right + 3, 'stem crosses label');
+}
+// Isolated labels always get the first row; the dense cluster cannot all fit.
+assert.equal(spots[0].row, 0); assert.equal(spots[spots.length - 1].row, 0);
+assert.ok(spots.some(s => s.row === -1));
+// Labels are clamped inside the track.
+assert.ok(spots.every((s, i) => s.left >= 0 && s.left + items[i].width <= 1000));
+"""
+    subprocess.run(["node", "-e", test, str(javascript)], check=True, capture_output=True, text=True)

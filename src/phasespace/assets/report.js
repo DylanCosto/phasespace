@@ -135,12 +135,39 @@
     return "c." + span(start + 1, start + ref.length) + "delins" + alt;
   }
 
+  const MAX_LABEL_ROWS = 3;
+
+  /**
+   * Assign each label (sorted by center) a row, or -1 when it cannot be placed.
+   * Labels in a row keep a 6 px gap; a stem never crosses a label in a lower row,
+   * and a label never sits across a stem rising from a lower pin to a higher row.
+   */
+  function placeLabels(items, width, maxRows) {
+    const placed = [];
+    return items.map(function (item) {
+      const left = Math.max(0, Math.min(width - item.width, item.center - item.width / 2));
+      const right = left + item.width;
+      for (let row = 0; row < maxRows; row += 1) {
+        const clash = placed.some(function (spot) {
+          if (spot.row === row) return left < spot.right + 6 && spot.left < right + 6;
+          if (spot.row < row) return item.center > spot.left - 3 && item.center < spot.right + 3;
+          return spot.center > left - 3 && spot.center < right + 3;
+        });
+        if (!clash) {
+          placed.push({ left: left, right: right, row: row, center: item.center });
+          return { row: row, left: left };
+        }
+      }
+      return { row: -1, left: left };
+    });
+  }
+
   // Export the exact report logic for independent tests.
   if (typeof module !== "undefined" && module.exports) {
     module.exports = {
       filterScenarios: filterScenarios, groupScenarios: groupScenarios, sharedProteinScale: sharedProteinScale,
       translate: translate, rebuildCds: rebuildCds, expandAnalysis: expandAnalysis, phaseVerdict: phaseVerdict,
-      flipTarget: flipTarget, changeLabel: changeLabel
+      flipTarget: flipTarget, changeLabel: changeLabel, placeLabels: placeLabels
     };
   }
   if (typeof document === "undefined") return;
@@ -453,6 +480,14 @@
     const axis = element("div", "exon-axis");
     axis.append(element("span", "start", "c.1"), element("span", "end", "c." + number(reference.length)));
     track.append(axis);
+    if (described.length) {
+      // Shown by layoutPins only when some labels do not fit above the track.
+      const chips = element("div", "change-chips");
+      chips.hidden = true;
+      chips.append(element("span", "chips-caption", plural(described.length, "change") + " on this copy:"));
+      described.forEach(function (name) { chips.append(element("span", "chip", name)); });
+      track.append(chips);
+    }
     copy.append(track);
     if (!ids.length) copy.insertBefore(element("p", "no-edits", "No alternate coding alleles on this copy."), track);
 
@@ -495,24 +530,26 @@
     return copy;
   }
 
-  /** Place pin labels in rows so none overlap, measuring their rendered widths. */
+  /** Lay out pin labels: no label overlaps another, and no stem crosses a label. */
   function layoutPins() {
     document.querySelectorAll(".pin-layer").forEach(function (layer) {
       const width = layer.clientWidth;
-      const rows = [];
       const pins = Array.from(layer.children).map(function (pin) {
-        const label = pin.firstChild;
-        return { pin: pin, label: label, center: parseFloat(pin.style.left) / 100 * width, width: label.offsetWidth };
+        pin.classList.remove("collapsed");
+        return { pin: pin, label: pin.firstChild, center: parseFloat(pin.style.left) / 100 * width, width: pin.firstChild.offsetWidth };
       }).sort(function (a, b) { return a.center - b.center; });
-      pins.forEach(function (item) {
-        const left = Math.max(0, Math.min(width - item.width, item.center - item.width / 2));
-        let row = rows.findIndex(function (end) { return end + 6 <= left; });
-        if (row < 0) { row = rows.length; rows.push(0); }
-        rows[row] = left + item.width;
-        item.label.style.left = (left - item.center) + "px";
-        item.pin.style.height = (30 + row * 26) + "px";
+      const spots = placeLabels(pins, width, MAX_LABEL_ROWS);
+      let rows = 0;
+      pins.forEach(function (item, index) {
+        const spot = spots[index];
+        if (spot.row < 0) { item.pin.classList.add("collapsed"); item.pin.style.height = "0px"; return; }
+        rows = Math.max(rows, spot.row + 1);
+        item.label.style.left = (spot.left - item.center) + "px";
+        item.pin.style.height = (30 + spot.row * 26) + "px";
       });
-      layer.style.height = rows.length ? (30 + (rows.length - 1) * 26) + "px" : "0px";
+      layer.style.height = rows ? (30 + (rows - 1) * 26) + "px" : "0px";
+      const chips = layer.parentElement.querySelector(".change-chips");
+      if (chips) chips.hidden = !spots.some(function (spot) { return spot.row < 0; });
     });
   }
 

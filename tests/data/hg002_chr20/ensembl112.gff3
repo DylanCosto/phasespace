@@ -5,6 +5,24 @@ chr20	ensembl_havana	exon	142590	142686	.	+	.	Parent=transcript:ENST00000382398;
 chr20	ensembl_havana	CDS	142629	142686	.	+	0	ID=CDS:ENSP00000371835;Parent=transcript:ENST00000382398;protein_id=ENSP00000371835
 chr20	ensembl_havana	CDS	145415	145692	.	+	2	ID=CDS:ENSP00000371835;Parent=transcript:ENST00000382398;protein_id=ENSP00000371835
 chr20	ensembl_havana	exon	145415	145751	.	+	.	Parent=transcript:ENST00000382398;Name=ENSE00000858522;constitutive=0;ensembl_end_phase=-1;ensembl_phase=1;exon_id=ENSE00000858522;rank=2;version=4
+chr20	ensembl_havana	gene	1894167	1940592	.	+	.	ID=gene:ENSG00000198053;Name=SIRPA;biotype=protein_coding;description=signal regulatory protein alpha [Source:HGNC Symbol%3BAcc:HGNC:9662];gene_id=ENSG00000198053;logic_name=ensembl_havana_gene_homo_sapiens;version=12
+chr20	havana	mRNA	1895407	1940592	.	+	.	ID=transcript:ENST00000358771;Parent=gene:ENSG00000198053;Name=SIRPA-202;biotype=protein_coding;ccdsid=CCDS13022.1;tag=basic,Ensembl_canonical,MANE_Select,GENCODE Primary;transcript_id=ENST00000358771;transcript_support_level=1 (assigned to previous version 4);version=5
+chr20	havana	exon	1895407	1895526	.	+	.	Parent=transcript:ENST00000358771;Name=ENSE00001290620;constitutive=0;ensembl_end_phase=1;ensembl_phase=-1;exon_id=ENSE00001290620;rank=1;version=9
+chr20	havana	CDS	1895448	1895526	.	+	0	ID=CDS:ENSP00000351621;Parent=transcript:ENST00000358771;protein_id=ENSP00000351621
+chr20	havana	exon	1915099	1915455	.	+	.	Parent=transcript:ENST00000358771;Name=ENSE00001673100;constitutive=1;ensembl_end_phase=1;ensembl_phase=1;exon_id=ENSE00001673100;rank=2;version=1
+chr20	havana	CDS	1915099	1915455	.	+	2	ID=CDS:ENSP00000351621;Parent=transcript:ENST00000358771;protein_id=ENSP00000351621
+chr20	havana	exon	1921395	1921712	.	+	.	Parent=transcript:ENST00000358771;Name=ENSE00001805661;constitutive=1;ensembl_end_phase=1;ensembl_phase=1;exon_id=ENSE00001805661;rank=3;version=1
+chr20	havana	CDS	1921395	1921712	.	+	2	ID=CDS:ENSP00000351621;Parent=transcript:ENST00000358771;protein_id=ENSP00000351621
+chr20	havana	exon	1922313	1922645	.	+	.	Parent=transcript:ENST00000358771;Name=ENSE00001735773;constitutive=1;ensembl_end_phase=1;ensembl_phase=1;exon_id=ENSE00001735773;rank=4;version=1
+chr20	havana	CDS	1922313	1922645	.	+	2	ID=CDS:ENSP00000351621;Parent=transcript:ENST00000358771;protein_id=ENSP00000351621
+chr20	havana	exon	1924764	1924877	.	+	.	Parent=transcript:ENST00000358771;Name=ENSE00000655714;constitutive=1;ensembl_end_phase=1;ensembl_phase=1;exon_id=ENSE00000655714;rank=5;version=1
+chr20	havana	CDS	1924764	1924877	.	+	2	ID=CDS:ENSP00000351621;Parent=transcript:ENST00000358771;protein_id=ENSP00000351621
+chr20	havana	exon	1927875	1927899	.	+	.	Parent=transcript:ENST00000358771;Name=ENSE00001043117;constitutive=1;ensembl_end_phase=2;ensembl_phase=1;exon_id=ENSE00001043117;rank=6;version=1
+chr20	havana	CDS	1927875	1927899	.	+	2	ID=CDS:ENSP00000351621;Parent=transcript:ENST00000358771;protein_id=ENSP00000351621
+chr20	havana	exon	1934715	1934754	.	+	.	Parent=transcript:ENST00000358771;Name=ENSE00000655716;constitutive=0;ensembl_end_phase=0;ensembl_phase=2;exon_id=ENSE00000655716;rank=7;version=2
+chr20	havana	CDS	1934715	1934754	.	+	1	ID=CDS:ENSP00000351621;Parent=transcript:ENST00000358771;protein_id=ENSP00000351621
+chr20	havana	CDS	1937320	1937568	.	+	0	ID=CDS:ENSP00000351621;Parent=transcript:ENST00000358771;protein_id=ENSP00000351621
+chr20	havana	exon	1937320	1940592	.	+	.	Parent=transcript:ENST00000358771;Name=ENSE00003740022;constitutive=0;ensembl_end_phase=-1;ensembl_phase=0;exon_id=ENSE00003740022;rank=8;version=1
 chr20	ensembl_havana	gene	3786772	3806121	.	+	.	ID=gene:ENSG00000101224;Name=CDC25B;biotype=protein_coding;description=cell division cycle 25B [Source:HGNC Symbol%3BAcc:HGNC:1726];gene_id=ENSG00000101224;logic_name=ensembl_havana_gene_homo_sapiens;version=18
 chr20	ensembl_havana	mRNA	3796310	3806115	.	+	.	ID=transcript:ENST00000245960;Parent=gene:ENSG00000101224;Name=CDC25B-201;biotype=protein_coding;ccdsid=CCDS13067.1;tag=basic,Ensembl_canonical,MANE_Select,GENCODE Primary;transcript_id=ENST00000245960;transcript_support_level=1 (assigned to previous version 9);version=10
 chr20	ensembl_havana	exon	3796310	3796731	.	+	.	Parent=transcript:ENST00000245960;Name=ENSE00001353605;constitutive=0;ensembl_end_phase=2;ensembl_phase=-1;exon_id=ENSE00001353605;rank=1;version=5

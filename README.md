@@ -44,6 +44,16 @@ Default call thresholds are GQ ≥ 20 and depth ≥ 5. Multi-base gVCF reference
 
 Deletions in gVCFs are handled whichever way the writer records the deleted bases. A reference block that continues through the bases removed by a called deletion is not treated as a conflict, and a `*` spanning-deletion allele is accepted when an upstream called deletion covers it. A `*` allele combined with another alternate allele at the same site is rejected, because placing it requires read-level phasing.
 
+### Using phase from WhatsHap, longphase or a trio
+
+Phasing tools write variant-only VCFs. Absent records in such a file are unknown evidence, never reference. To keep the gVCF's reference evidence, copy the phase onto the gVCF first:
+
+```bash
+python scripts/transfer_phase.py SAMPLE calls.g.vcf.gz phased.vcf.gz phased.g.vcf.gz
+```
+
+Records are matched by position, REF and called allele sequences, and only the GT order, the phased flag and PS change. Calls with the same `PS` then share one orientation block.
+
 ## What the report shows
 
 - All supported phase arrangements consistent with the recorded genotype order and phase sets.

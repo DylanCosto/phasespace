@@ -9,7 +9,8 @@ README; see docs/validation.md for how they were obtained.
         --fasta GRCh38.chr20.fa --gtf gencode.v46.annotation.gtf.gz \\
         --gff3 Homo_sapiens.GRCh38.112.chromosome.20.gff3.gz \\
         --vcf pacbio=pacbio-chr20.HG002.g.vcf.gz --vcf deepvariant=dv.HG002.g.vcf.gz \\
-        --vcf giab=giab-v4.2.1.HG002.chr20.vcf.gz --out tests/data/hg002_chr20
+        --vcf giab=giab-v4.2.1.HG002.chr20.vcf.gz --vcf trio=trio-phased.HG002.g.vcf.gz \\
+        --out tests/data/hg002_chr20
 """
 import argparse
 import gzip
@@ -25,6 +26,7 @@ TRANSCRIPTS = {
     "ENST00000245960.10": "CDC25B: three unphased synonymous SNVs; CDS changes but protein never does",
     "ENST00000217428.7": "SPINT3: three unphased SNVs including missense, reverse strand",
     "ENST00000382398.4": "DEFB126: homozygous frameshift that reads through the stop codon",
+    "ENST00000358771.5": "SIRPA: 20 heterozygous variants; exceeds the block cap unless trio-phased",
 }
 PAD = 100
 
@@ -107,7 +109,7 @@ def main():
 
     (args.out / "README.md").write_text(
         "# HG002 chr20 regression fixture\n\n"
-        "Real GIAB HG002 calls for five GRCh38 chr20 transcripts, cut by `scripts/make_hg002_fixture.py`.\n"
+        "Real GIAB HG002 calls for six GRCh38 chr20 transcripts, cut by `scripts/make_hg002_fixture.py`.\n"
         "Coordinates are unchanged; reference bases outside the coding spans (plus 100 bp) are masked to N.\n\n"
         "| Transcript | Why it is here |\n|---|---|\n"
         + "".join(f"| {name} | {why} |\n" for name, why in TRANSCRIPTS.items())
@@ -118,6 +120,10 @@ def main():
         "`case-study-outputs/1.10.0/deeptrio/ont-r104-chr20/HG002.child.g.vcf.gz`. Despite the folder name, the file "
         "also holds exome-scale calls on other chromosomes, so its sequencing platform is not asserted here.\n"
         "- `giab.HG002.vcf.gz`: GIAB HG002 NISTv4.2.1 GRCh38 benchmark VCF (unphased, variant-only).\n"
+        "- `trio.HG002.vcf.gz`: the `deepvariant` gVCF with phase from transmission. The DeepTrio HG002, HG003 and "
+        "HG004 gVCFs from the same run were merged (`bcftools merge --gvcf`), genotypes with GQ < 20 set missing, "
+        "phased with WhatsHap 2.8 `phase --ped` without reads, and copied back by `scripts/transfer_phase.py`. "
+        "Sites heterozygous in all three samples stay unphased.\n"
         "- `GRCh38.chr20.masked.fa.gz`: chr20 of the GRCh38 no-alt analysis set used by DeepVariant.\n"
         "- `gencode.v46.gtf`: GENCODE v46 comprehensive annotation. `ensembl112.gff3`: Ensembl 112 chr20 GFF3, "
         "contig renamed from `20` to `chr20`.\n"

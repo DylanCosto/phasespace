@@ -232,6 +232,10 @@ h1 { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; font-
 .pin { position: absolute; bottom: 0; width: 0; height: 30px; }
 .pin-label { position: absolute; top: 0; left: 0; font-family: var(--mono); font-size: 11.5px; font-weight: 600; line-height: 20px; white-space: nowrap; padding: 0 7px; border-radius: 6px; background: var(--copy-soft); color: var(--ink); border: 1px solid color-mix(in srgb, var(--copy) 35%, transparent); cursor: default; }
 .pin-stem { position: absolute; left: -1px; top: 22px; bottom: 0; width: 2px; background: var(--copy); }
+.pin.collapsed .pin-label, .pin.collapsed .pin-stem { display: none; }
+.change-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin-top: 4px; }
+.change-chips .chips-caption { font-size: 11.5px; color: var(--muted); margin-right: 2px; }
+.change-chips .chip { font-family: var(--mono); font-size: 11.5px; font-weight: 600; line-height: 20px; padding: 0 7px; border-radius: 6px; background: var(--copy-soft); border: 1px solid color-mix(in srgb, var(--copy) 35%, transparent); }
 .exon-bar { position: relative; height: 14px; border-radius: 4px; background: var(--copy-track); }
 .exon-gap { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--surface); }
 .pin-head { position: absolute; top: 50%; width: 12px; height: 12px; margin: -6px 0 0 -6px; border-radius: 50%; background: var(--copy); box-shadow: 0 0 0 2px var(--surface); }

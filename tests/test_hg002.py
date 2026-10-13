@@ -13,6 +13,7 @@ import pytest
 from phasespace.analysis import analyze
 from phasespace.cli import main
 from phasespace.inputs import load_locus
+from phasespace.models import PhaseSpaceError
 
 DATA = Path(__file__).parent / "data" / "hg002_chr20"
 FASTA = DATA / "GRCh38.chr20.masked.fa.gz"
@@ -95,3 +96,40 @@ def test_cli_report_on_real_data(tmp_path):
     assert result["sample"] == "HG002" and result["scenario_count"] == 4
     embedded = re.search(r'<script id="phasespace-data" type="application/json">(.*?)</script>', out.read_text(), re.S)
     assert json.loads(embedded.group(1))["report_encoding"] == "edits"
+
+
+# Trio phasing: the `trio` input is the `deepvariant` gVCF with phase from transmission.
+GTF = ANNOTATIONS[0]
+KEEPS_PROTEIN = {"reference", "synonymous", "protein_sequence_unchanged"}
+
+
+@pytest.mark.parametrize("transcript", EXPECTED)
+def test_trio_phase_only_removes_arrangements(transcript):
+    unphased = analyze(load("deepvariant", GTF, transcript))
+    phased_locus = load("trio", GTF, transcript)
+    phased = analyze(phased_locus)
+    # Phase can only exclude arrangements; it never creates a new outcome.
+    assert {s["outcome_key"] for s in phased["scenarios"]} <= {s["outcome_key"] for s in unphased["scenarios"]}
+    assert phased["scenario_count"] <= unphased["scenario_count"]
+    assert all(v.phase_set == "157484" for v in phased_locus.variants if v.phased)
+
+
+def test_trio_phase_resolves_spint3_to_missense_on_both_copies():
+    unphased = analyze(load("deepvariant", GTF, "ENST00000217428.7"))
+    phased = analyze(load("trio", GTF, "ENST00000217428.7"))
+    keeps = [any(set(h["consequences"]) <= KEEPS_PROTEIN for h in s["haplotypes"]) for s in unphased["scenarios"]]
+    assert True in keeps and False in keeps  # Unphased, phase decides.
+    assert [b["label"] for b in phased["blocks"]] == ["Phase set 157484"]
+    assert phased["scenario_count"] == 1
+    assert [h["consequences"] for h in phased["scenarios"][0]["haplotypes"]] == [["missense"], ["missense"]]
+
+
+def test_trio_phase_brings_sirpa_under_the_block_cap():
+    with pytest.raises(PhaseSpaceError, match="20 independent phase blocks"):
+        analyze(load("deepvariant", GTF, "ENST00000358771.5"))
+    result = analyze(load("trio", GTF, "ENST00000358771.5"))
+    assert [len(b["variant_ids"]) for b in result["blocks"]] == [19, 1]
+    assert result["scenario_count"] == 2
+    # One copy carries the 19 phased alternate alleles, including an in-frame deletion.
+    for scenario in result["scenarios"]:
+        assert "inframe_deletion" in scenario["haplotypes"][1]["consequences"]
