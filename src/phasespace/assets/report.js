@@ -2,6 +2,12 @@
 (function () {
   "use strict";
 
+  // NCBI translation table 1, matching analysis.py; codons with N translate to X.
+  const BASES = "TCAG";
+  const AMINO_ACIDS = "FFLLSSSSYY**CC*WLLLLPPPPHHQQRRRRIIIMTTTTNNKKSSRRVVVVAAAADDEEGGGG";
+  const CODONS = {};
+  for (let i = 0; i < 64; i += 1) CODONS[BASES[i >> 4] + BASES[(i >> 2) & 3] + BASES[i & 3]] = AMINO_ACIDS[i];
+
   function filterScenarios(scenarios, constraints) {
     return scenarios.filter(function (scenario) {
       return constraints.every(function (constraint) {
@@ -29,25 +35,132 @@
     }, Math.max(1, referenceLength || 0));
   }
 
+  /** Translate complete codons up to, not including, the first stop. */
+  function translate(cds) {
+    let protein = "";
+    for (let i = 0; i + 3 <= cds.length; i += 3) {
+      const amino = CODONS[cds.slice(i, i + 3)] || "X";
+      if (amino === "*") break;
+      protein += amino;
+    }
+    return protein;
+  }
+
+  /** Rebuild one copy's CDS from the reference and its called edits. */
+  function rebuildCds(reference, haplotype, variantLookup) {
+    if (typeof haplotype.cds === "string") return haplotype.cds;
+    const edits = (haplotype.variant_ids || []).map(function (id, index) {
+      return { variant: variantLookup.get(id), allele: haplotype.alleles[index] };
+    });
+    edits.sort(function (a, b) { return b.variant.cds_start - a.variant.cds_start; });
+    return edits.reduce(function (cds, edit) {
+      return cds.slice(0, edit.variant.cds_start) + edit.allele.toUpperCase() + cds.slice(edit.variant.cds_end);
+    }, reference);
+  }
+
+  /** Restore the complete analysis schema from a report's compact encoding. */
+  function expandAnalysis(data) {
+    const reference = data.transcript.reference_cds;
+    const lookup = new Map((data.variants || []).map(function (variant) { return [variant.id, variant]; }));
+    const expanded = Object.assign({}, data, {
+      scenarios: (data.scenarios || []).map(function (scenario) {
+        return Object.assign({}, scenario, {
+          haplotypes: scenario.haplotypes.map(function (haplotype) {
+            if (typeof haplotype.cds === "string") return haplotype;
+            const cds = rebuildCds(reference, haplotype, lookup);
+            const copy = {};
+            Object.keys(haplotype).forEach(function (key) {
+              copy[key] = haplotype[key];
+              if (key === "alleles") { copy.cds = cds; copy.protein = translate(cds); }
+            });
+            return copy;
+          })
+        });
+      })
+    });
+    delete expanded.report_encoding;
+    return expanded;
+  }
+
+  function isReferenceCopy(haplotype, reference) {
+    return (haplotype.consequences || []).indexOf("reference") >= 0 || (typeof haplotype.cds === "string" && haplotype.cds === reference);
+  }
+
+  /** How many compatible arrangements keep at least one reference-identical copy. */
+  function phaseVerdict(scenarios, reference) {
+    const counts = scenarios.map(function (scenario) {
+      return scenario.haplotypes.filter(function (haplotype) { return isReferenceCopy(haplotype, reference); }).length;
+    });
+    const keep = counts.filter(function (count) { return count > 0; }).length;
+    const tone = !counts.length ? "empty" : keep === counts.length ? "good" : keep === 0 ? "none" : "mixed";
+    return { tone: tone, total: counts.length, keep: keep, min: Math.min.apply(null, counts), max: Math.max.apply(null, counts) };
+  }
+
+  /** The arrangement reached by moving one block's alleles to the other copy. */
+  function flipTarget(scenarios, blockIds, current, blockId) {
+    if (blockIds.length < 2) return null;
+    const target = Object.assign({}, current.orientations);
+    // Block 1 is fixed to remove copy-label symmetry; flipping it equals flipping the rest.
+    blockIds.forEach(function (id) {
+      if (blockId === blockIds[0] ? id !== blockId : id === blockId) target[id] ^= 1;
+    });
+    return scenarios.find(function (scenario) {
+      return blockIds.every(function (id) { return scenario.orientations[id] === target[id]; });
+    }) || null;
+  }
+
+  /** A short coding-change label. Substitutions are exact; indels are not 3'-normalized. */
+  function changeLabel(variant, allele) {
+    const ref = variant.cds_ref.toUpperCase();
+    const alt = allele.toUpperCase();
+    const start = variant.cds_start;
+    const span = function (a, b) { return a === b ? String(a) : a + "_" + b; };
+    if (ref.length === alt.length) return ref.length === 1 ? "c." + (start + 1) + ref + ">" + alt : "c." + span(start + 1, start + ref.length) + "delins" + alt;
+    if (alt.length < ref.length && ref.startsWith(alt)) return "c." + span(start + alt.length + 1, start + ref.length) + "del";
+    if (alt.length < ref.length && ref.endsWith(alt)) return "c." + span(start + 1, start + ref.length - alt.length) + "del";
+    if (alt.length > ref.length && alt.startsWith(ref)) return "c." + (start + ref.length) + "_" + (start + ref.length + 1) + "ins" + alt.slice(ref.length);
+    if (alt.length > ref.length && alt.endsWith(ref)) return "c." + start + "_" + (start + 1) + "ins" + alt.slice(0, alt.length - ref.length);
+    return "c." + span(start + 1, start + ref.length) + "delins" + alt;
+  }
+
   // Export the exact report logic for independent tests.
   if (typeof module !== "undefined" && module.exports) {
-    module.exports = { filterScenarios: filterScenarios, groupScenarios: groupScenarios, sharedProteinScale: sharedProteinScale };
+    module.exports = {
+      filterScenarios: filterScenarios, groupScenarios: groupScenarios, sharedProteinScale: sharedProteinScale,
+      translate: translate, rebuildCds: rebuildCds, expandAnalysis: expandAnalysis, phaseVerdict: phaseVerdict,
+      flipTarget: flipTarget, changeLabel: changeLabel
+    };
   }
   if (typeof document === "undefined") return;
 
   const data = JSON.parse(document.getElementById("phasespace-data").textContent);
   const transcript = data.transcript;
+  const reference = transcript.reference_cds;
   const blocks = data.blocks || [];
+  const blockIds = blocks.map(function (block) { return block.id; });
   const scenarios = data.scenarios || [];
   const variants = data.variants || [];
   const proteinScale = sharedProteinScale(scenarios, data.reference_protein_length);
   const variantLookup = new Map(variants.map(function (variant) { return [variant.id, variant]; }));
   const blockLookup = new Map(blocks.map(function (block) { return [block.id, block]; }));
-  const state = { constraints: [], selectedId: scenarios.length ? scenarios[0].id : null, compatible: [] };
+  const scenarioNumber = new Map(scenarios.map(function (scenario, index) { return [scenario.id, index + 1]; }));
+  const outcomeNumber = new Map(groupScenarios(scenarios).map(function (group, index) { return [group[0].outcome_key, index + 1]; }));
+  const sequenceCache = new Map();
+  const state = { constraints: [], selectedId: scenarios.length ? scenarios[0].id : null, compatible: [], showAllOutcomes: false };
+  const OUTCOME_PREVIEW = 24;
   const byId = function (id) { return document.getElementById(id); };
   const number = function (value) { return Number(value).toLocaleString("en-US"); };
+  const plural = function (count, word, many) { return number(count) + " " + (count === 1 ? word : (many || word + "s")); };
   const text = function (id, value) { byId(id).textContent = String(value); };
-  const blockName = function (id) { const index = blocks.findIndex(function (block) { return block.id === id; }); return index >= 0 ? "Block " + (index + 1) : String(id); };
+  const blockName = function (id) { const index = blockIds.indexOf(id); return index >= 0 ? "Block " + (index + 1) : String(id); };
+  const SVG_NS = "http://www.w3.org/2000/svg";
+  const CONSEQUENCES = {
+    reference: ["Reference CDS", "good"], synonymous: ["Synonymous", "good"], protein_sequence_unchanged: ["Protein unchanged", "good"],
+    stop_gained: ["Premature stop", "critical"], frameshift: ["Frameshift", "critical"], start_lost: ["Start lost", "critical"], stop_lost: ["Stop lost", "critical"],
+    missense: ["Missense", "warning"], inframe_insertion: ["In-frame insertion", "warning"], inframe_deletion: ["In-frame deletion", "warning"],
+    frame_restored: ["Frame restored", "warning"], uncertain_codon: ["Uncertain codon", "warning"]
+  };
+  const DISRUPTIVE = ["frameshift", "stop_gained", "start_lost", "stop_lost"];
 
   function element(tag, className, content) {
     const node = document.createElement(tag);
@@ -56,103 +169,460 @@
     return node;
   }
 
+  function icon(paths, viewBox) {
+    const svg = document.createElementNS(SVG_NS, "svg");
+    svg.setAttribute("viewBox", viewBox || "0 0 24 24");
+    svg.setAttribute("aria-hidden", "true");
+    paths.forEach(function (d) { const path = document.createElementNS(SVG_NS, "path"); path.setAttribute("d", d); svg.append(path); });
+    return svg;
+  }
+  const ICONS = {
+    check: ["M5 12.5l4.5 4.5L19 7.5"],
+    alert: ["M12 8v5", "M12 16.5v.5", "M10.3 3.9 2.6 17.5A2 2 0 0 0 4.3 20.5h15.4a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"],
+    split: ["M6 4v6a4 4 0 0 0 4 4h8", "M6 20v-6", "M15 11l3 3-3 3"],
+    dot: ["M12 12h.01"],
+    flip: ["M4 5h7l-2-2", "M12 11H5l2 2"]
+  };
+
   function option(value, label) {
     const node = element("option", "", label);
     node.value = String(value);
     return node;
   }
 
-  function describeVariant(variant) {
-    const alternate = (variant.alleles || []).filter(function (allele) { return allele !== variant.ref; });
-    return "CDS base " + number(variant.cds_start + 1) + " · genomic alleles " + variant.ref + " → " + Array.from(new Set(alternate)).join(" / ");
+  function tip(node, value) { node.dataset.tip = value; return node; }
+
+  function consequenceLabel(key) { return (CONSEQUENCES[key] || [String(key).replace(/_/g, " ")])[0]; }
+  function consequenceTone(key) { return (CONSEQUENCES[key] || [null, "neutral"])[1]; }
+
+  /** Allele carried by one copy, from the analysis or (for older results) its orientation. */
+  function alleleOnCopy(scenario, copyIndex, variant) {
+    const haplotype = scenario.haplotypes[copyIndex];
+    const index = (haplotype.variant_ids || []).indexOf(variant.id);
+    if (index >= 0 && haplotype.alleles) return haplotype.alleles[index];
+    const bit = variant.block ? scenario.orientations[variant.block] || 0 : 0;
+    return variant.cds_alleles[copyIndex ^ bit];
   }
 
-  function renderEvidence() {
-    const intervals = transcript.cds_intervals || [];
-    const container = byId("evidence-map");
-    if (!intervals.length) {
-      container.append(element("p", "small-note", "No coding intervals available."));
-      return;
+  function sequencesFor(haplotype) {
+    if (!sequenceCache.has(haplotype)) {
+      const cds = rebuildCds(reference, haplotype, variantLookup);
+      sequenceCache.set(haplotype, { cds: cds, protein: typeof haplotype.protein === "string" ? haplotype.protein : translate(cds) });
     }
-    const start = Math.min.apply(null, intervals.map(function (interval) { return interval[0]; }));
-    const end = Math.max.apply(null, intervals.map(function (interval) { return interval[1]; }));
-    const width = Math.max(1, end - start);
-    const mapX = function (value) { return ((value - start) / width) * 1000; };
-    const label = element("div", "map-label");
-    label.append(element("span", "", "Coding intervals · genomic coordinates"), element("span", "", (transcript.strand === "-" ? "← Reverse" : "Forward →") + " strand"));
-    container.append(label);
-    const ns = "http://www.w3.org/2000/svg";
-    const svg = document.createElementNS(ns, "svg");
-    svg.setAttribute("viewBox", "0 0 1000 52");
-    svg.setAttribute("class", "evidence-svg");
-    svg.setAttribute("preserveAspectRatio", "none");
-    svg.setAttribute("role", "img");
-    svg.setAttribute("aria-label", "Coding evidence across " + transcript.contig + ":" + (start + 1) + "–" + end + ". Unknown intervals are hatched, reference calls blue-gray, and variant calls coral.");
-    const defs = document.createElementNS(ns, "defs");
-    const pattern = document.createElementNS(ns, "pattern");
-    pattern.setAttribute("id", "unknown-hatch");
-    pattern.setAttribute("width", "7"); pattern.setAttribute("height", "7"); pattern.setAttribute("patternUnits", "userSpaceOnUse");
-    const patternBackground = document.createElementNS(ns, "rect");
-    patternBackground.setAttribute("width", "7"); patternBackground.setAttribute("height", "7"); patternBackground.setAttribute("fill", "#f1f3f7");
-    const stripe = document.createElementNS(ns, "path");
-    stripe.setAttribute("d", "M-1,1 L1,-1 M0,7 L7,0 M6,8 L8,6"); stripe.setAttribute("stroke", "#d5dce5"); stripe.setAttribute("stroke-width", "2");
-    pattern.append(patternBackground, stripe); defs.append(pattern); svg.append(defs);
-    const line = document.createElementNS(ns, "line");
-    line.setAttribute("x1", "0"); line.setAttribute("x2", "1000"); line.setAttribute("y1", "25"); line.setAttribute("y2", "25"); line.setAttribute("stroke", "#d5dce5"); line.setAttribute("stroke-width", "2"); svg.append(line);
-    function rectangle(a, b, status, detail) {
-      const rect = document.createElementNS(ns, "rect");
-      const x = Math.max(0, Math.min(1000, mapX(a)));
-      rect.setAttribute("x", String(x));
-      rect.setAttribute("y", "10");
-      rect.setAttribute("width", String(Math.min(1000 - x, Math.max(status === "variant" ? 3 : 1, mapX(b) - x))));
-      rect.setAttribute("height", "30");
-      rect.setAttribute("rx", "2");
-      rect.setAttribute("fill", status === "reference" ? "#6d8e92" : status === "variant" ? "#bc593d" : "url(#unknown-hatch)");
-      const title = document.createElementNS(ns, "title");
-      title.textContent = transcript.contig + ":" + number(a + 1) + "–" + number(b) + " · " + status + (detail ? " · " + detail : "");
-      rect.append(title); svg.append(rect);
-    }
-    intervals.forEach(function (interval) { rectangle(interval[0], interval[1], "unknown", "No confident reference or variant call provided"); });
+    return sequenceCache.get(haplotype);
+  }
+
+  /** Coding intervals in transcript (5'→3') order with their CDS offsets. */
+  const exons = (function () {
+    const ordered = (transcript.cds_intervals || []).slice();
+    if (transcript.strand === "-") ordered.reverse();
+    let offset = 0;
+    return ordered.map(function (interval, index) {
+      const exon = { index: index, left: interval[0], right: interval[1], start: offset, end: offset + interval[1] - interval[0] };
+      offset = exon.end;
+      return exon;
+    });
+  })();
+  const cdsLength = Math.max(1, reference.length);
+  const pct = function (position) { return Math.max(0, Math.min(100, 100 * position / cdsLength)); };
+
+  function toCds(exon, a, b) {
+    return transcript.strand === "-" ? [exon.start + exon.right - b, exon.start + exon.right - a] : [exon.start + a - exon.left, exon.start + b - exon.left];
+  }
+
+  /** Base counts for each evidence status, in CDS coordinates. */
+  const evidence = (function () {
+    const pieces = [];
     const counts = { reference: 0, variant: 0, unknown: 0 };
-    (data.evidence || []).forEach(function (evidence) {
-      const status = evidence.status === "reference" || evidence.status === "variant" ? evidence.status : "unknown";
-      intervals.forEach(function (interval) {
-        const a = Math.max(interval[0], evidence.start);
-        const b = Math.min(interval[1], evidence.end);
-        if (b > a) {
-          counts[status] += b - a;
-          rectangle(a, b, status, evidence.detail);
-        }
+    (data.evidence || []).forEach(function (item) {
+      const status = item.status === "reference" || item.status === "variant" ? item.status : "unknown";
+      exons.forEach(function (exon) {
+        const a = Math.max(exon.left, item.start);
+        const b = Math.min(exon.right, item.end);
+        if (b <= a) return;
+        const range = toCds(exon, a, b);
+        counts[status] += b - a;
+        pieces.push({ start: range[0], end: range[1], status: status, detail: item.detail, genomic: [a, b] });
       });
     });
-    container.append(svg);
-    const axis = element("div", "axis-labels");
-    axis.append(element("span", "", transcript.contig + ":" + number(start + 1)), element("span", "", number(end)));
-    container.append(axis);
-    const total = intervals.reduce(function (sum, interval) { return sum + interval[1] - interval[0]; }, 0);
+    const total = exons.reduce(function (sum, exon) { return sum + exon.end - exon.start; }, 0);
     // Missing evidence still counts as unknown, never as reference.
     counts.unknown = Math.max(counts.unknown, total - counts.reference - counts.variant);
-    const key = element("div", "evidence-key");
-    key.append(element("span", "", number(total) + " coding bases"), element("span", "", number(counts.reference) + " reference-called"), element("span", "", number(counts.variant) + " variant-called"), element("span", "", number(counts.unknown) + " unknown"));
-    container.append(key);
+    return { pieces: pieces, counts: counts, total: total };
+  })();
+
+  /* ---------- Header, verdict and stats ---------- */
+
+  function renderIdentity() {
+    text("gene-title", transcript.gene || transcript.id);
+    text("transcript-id", transcript.id);
+    text("sample-label", "Sample " + data.sample);
+    const meta = byId("locus-meta");
+    const start = Math.min.apply(null, exons.map(function (exon) { return exon.left; }));
+    const end = Math.max.apply(null, exons.map(function (exon) { return exon.right; }));
+    [transcript.contig + ":" + number(start + 1) + "–" + number(end), (transcript.strand === "-" ? "Reverse" : "Forward") + " strand",
+      number(reference.length) + " coding bases", plural(exons.length, "coding exon"), plural(variants.length, "called variant")].forEach(function (value) {
+      meta.append(element("span", "", value));
+    });
+    byId("synthetic-label").hidden = data.synthetic !== true;
+    text("total-arrangements", number(scenarios.length));
+    text("arrangements-note", blocks.length ? plural(blocks.length, "independent phase block") : "no heterozygous phase blocks");
+    text("total-outcomes", number(outcomeNumber.size));
+    if (Number.isInteger(data.protein_outcome_count)) {
+      byId("protein-summary").hidden = false;
+      text("total-protein-outcomes", number(data.protein_outcome_count));
+    }
+    const called = evidence.counts.reference + evidence.counts.variant;
+    const share = evidence.total ? Math.round(100 * called / evidence.total) : 0;
+    text("coverage-stat", share + "%");
+    byId("coverage-meter").style.width = share + "%";
+    tip(byId("coverage-meter").parentElement.parentElement, number(called) + " of " + number(evidence.total) + " coding bases have a passing reference or variant call.");
+    text("source-meta", (data.source ? "Source: " + data.source : "Source metadata unavailable") + (data.version ? "  ·  PhaseSpace " + data.version : ""));
+    if (data.version) text("version-label", data.version);
+    document.title = (transcript.gene || transcript.id) + " · " + data.sample + " · PhaseSpace";
+    if ((data.warnings || []).length) {
+      byId("warning-panel").hidden = false;
+      data.warnings.forEach(function (warning) { byId("warnings").append(element("li", "", warning)); });
+    }
+  }
+
+  function renderVerdict() {
+    const verdict = phaseVerdict(state.compatible, reference);
+    const box = byId("verdict");
+    box.dataset.tone = verdict.tone;
+    const iconBox = box.querySelector(".verdict-icon");
+    iconBox.replaceChildren(icon(verdict.tone === "good" ? ICONS.check : verdict.tone === "mixed" ? ICONS.split : ICONS.alert));
+    let title, detail;
+    if (verdict.tone === "empty") {
+      title = "No arrangement fits the applied hypotheses";
+      detail = "Remove or reset a hypothesis to see supported arrangements again.";
+    } else if (verdict.tone === "good" && verdict.min === 2) {
+      title = "Both copies match the reference coding sequence";
+      detail = "No included call changes the CDS of either copy.";
+    } else if (verdict.tone === "good") {
+      title = "Every arrangement keeps a reference-identical copy";
+      detail = "Whatever the phase, at least one copy carries no change to the coding sequence.";
+    } else if (verdict.tone === "none") {
+      title = "No arrangement keeps a reference-identical copy";
+      detail = "Both copies carry coding changes in " + (verdict.total === 1 ? "the only compatible arrangement." : "all " + number(verdict.total) + " compatible arrangements.");
+    } else {
+      title = "Phase decides whether a reference-identical copy remains";
+      const lost = verdict.total - verdict.keep;
+      detail = number(verdict.keep) + " of " + number(verdict.total) + " arrangements " + (verdict.keep === 1 ? "keeps" : "keep") + " one; " + number(lost) + (lost === 1 ? " leaves" : " leave") + " both copies altered. Resolving the block relationships would tell them apart.";
+    }
+    if (verdict.tone !== "empty" && evidence.counts.unknown > 0) detail += " Applies to included calls only: " + plural(evidence.counts.unknown, "coding base") + " lack evidence.";
+    text("verdict-title", title);
+    text("verdict-detail", detail);
+  }
+
+  /* ---------- Phase blocks ---------- */
+
+  function renderBlocks(selected) {
+    const strip = byId("block-strip");
+    strip.replaceChildren();
+    blocks.forEach(function (block, index) {
+      const card = element("div", "block-card");
+      const name = element("div", "block-name");
+      name.append(document.createTextNode(blockName(block.id)));
+      name.append(element("small", "", block.label.replace(/^Unphased .*/, "unphased").replace(/^Phase set /, "PS ").replace(/^Phased calls without PS.*/, "implicit phase set")));
+      tip(name, block.label + "\n" + block.variant_ids.join("\n"));
+      const flip = element("button", "flip");
+      flip.type = "button";
+      flip.append(icon(["M3 5h8l-2.5-2.5", "M13 11H5l2.5 2.5"], "0 0 16 16"), document.createTextNode("Flip"));
+      const target = flipTarget(scenarios, blockIds, selected, block.id);
+      const allowed = target && state.compatible.indexOf(target) >= 0;
+      flip.disabled = !allowed;
+      flip.setAttribute("aria-label", "Flip " + blockName(block.id) + " to the other copy");
+      if (!target) tip(flip, "With one block, flipping only swaps the copy labels.");
+      else if (!allowed) tip(flip, "That arrangement is excluded by your hypotheses.");
+      else tip(flip, "Move this block's alleles to the other copy" + (index === 0 ? " (equivalent to flipping every other block)" : ""));
+      flip.addEventListener("click", function () { if (target) { state.selectedId = target.id; renderSelected(); } });
+      card.append(name, flip);
+      const sides = element("div", "block-sides");
+      [0, 1].forEach(function (copyIndex) {
+        const side = element("div", "block-side");
+        const dot = element("span", "side-dot", copyIndex ? "B" : "A");
+        dot.style.setProperty("--side-color", copyIndex ? "var(--copy-b)" : "var(--copy-a)");
+        const labels = block.variant_ids.map(function (id) { return variantLookup.get(id); }).filter(Boolean).map(function (variant) {
+          const allele = alleleOnCopy(selected, copyIndex, variant);
+          return allele.toUpperCase() === variant.cds_ref.toUpperCase() ? null : changeLabel(variant, allele);
+        }).filter(Boolean);
+        const list = element("span", "side-variants" + (labels.length ? "" : " empty"), labels.length ? labels.join(", ") : "reference alleles");
+        if (labels.length) tip(list, labels.join("\n"));
+        side.append(dot, list);
+        sides.append(side);
+      });
+      card.append(sides);
+      strip.append(card);
+    });
+    const fixed = variants.filter(function (variant) { return !variant.block; });
+    if (fixed.length) {
+      const card = element("div", "block-card");
+      const name = element("div", "block-name");
+      name.append(document.createTextNode("Fixed"), element("small", "", "on both copies"));
+      card.append(name, element("span", "block-fixed", plural(fixed.length, "variant")));
+      const list = element("div", "block-sides");
+      const labels = fixed.map(function (variant) { return changeLabel(variant, variant.cds_alleles[0]); });
+      const row = element("div", "block-side");
+      const variantsText = element("span", "side-variants", labels.join(", "));
+      tip(variantsText, "Homozygous calls sit on both copies in every arrangement.\n" + labels.join("\n"));
+      row.append(variantsText);
+      list.append(row);
+      card.append(list);
+      strip.append(card);
+    }
+    if (!strip.children.length) strip.append(element("p", "no-edits", "No heterozygous phase blocks. Both copies are determined by the included calls."));
+  }
+
+  /* ---------- Copy tracks ---------- */
+
+  function copyVerdict(haplotype) {
+    const consequences = haplotype.consequences || [];
+    if (isReferenceCopy(haplotype, reference)) return { tone: "is-reference", label: "Reference-identical CDS", icon: ICONS.check };
+    const disruptive = DISRUPTIVE.filter(function (key) { return consequences.indexOf(key) >= 0; });
+    if (disruptive.length) return { tone: "is-disrupted", label: consequenceLabel(disruptive[0]), icon: ICONS.alert };
+    if (consequences.indexOf("synonymous") >= 0 || consequences.indexOf("protein_sequence_unchanged") >= 0) return { tone: "", label: "Protein unchanged", icon: ICONS.dot };
+    return { tone: "is-altered", label: "Altered protein", icon: ICONS.dot };
+  }
+
+  function renderCopy(scenario, copyIndex) {
+    const haplotype = scenario.haplotypes[copyIndex];
+    const other = scenario.haplotypes[1 - copyIndex];
+    const copy = element("article", "copy " + (copyIndex ? "copy-b" : "copy-a"));
+    const head = element("div", "copy-head");
+    const title = element("h3", "", "Copy " + (copyIndex ? "B" : "A"));
+    const verdict = copyVerdict(haplotype);
+    const pill = element("span", "copy-verdict " + verdict.tone);
+    pill.append(icon(verdict.icon), document.createTextNode(verdict.label));
+    const headline = element("span", "copy-headline");
+    headline.append(element("strong", "", number(haplotype.protein_length) + " aa"), document.createTextNode(" of " + number(data.reference_protein_length) + " in the reference"));
+    head.append(element("span", "copy-badge", copyIndex ? "B" : "A"), title, pill, headline);
+    copy.append(head);
+
+    const label = element("div", "track-label");
+    label.append(element("span", "", "Coding sequence"), element("span", "", number(reference.length) + " nt reference · " + plural(exons.length, "exon")));
+    copy.append(label);
+    const track = element("div", "cds-track");
+    const pins = element("div", "pin-layer");
+    const bar = element("div", "exon-bar");
+    bar.setAttribute("role", "img");
+    exons.slice(1).forEach(function (exon) {
+      const gap = element("span", "exon-gap");
+      gap.style.left = pct(exon.start) + "%";
+      bar.append(gap);
+    });
+    const ids = haplotype.variant_ids || [];
+    const described = [];
+    ids.forEach(function (id) {
+      const variant = variantLookup.get(id);
+      if (!variant) return;
+      const allele = alleleOnCopy(scenario, copyIndex, variant);
+      const name = changeLabel(variant, allele);
+      described.push(name);
+      const center = pct((variant.cds_start + Math.max(variant.cds_end, variant.cds_start + 1)) / 2);
+      const pin = element("span", "pin");
+      pin.style.left = center + "%";
+      const labelNode = tip(element("span", "pin-label", name), name + "\n" + variant.id + "\nGT " + variant.gt.join(variant.phased ? "|" : "/") + (variant.block ? " · " + blockName(variant.block) : " · on both copies"));
+      pin.append(labelNode, element("span", "pin-stem"));
+      pins.append(pin);
+      const head = element("span", "pin-head");
+      head.style.left = center + "%";
+      bar.append(head);
+    });
+    (other.variant_ids || []).filter(function (id) { return ids.indexOf(id) < 0; }).forEach(function (id) {
+      const variant = variantLookup.get(id);
+      if (!variant) return;
+      const ghost = tip(element("span", "ghost"), changeLabel(variant, alleleOnCopy(scenario, 1 - copyIndex, variant)) + " is on the other copy; this copy has the reference allele.");
+      ghost.style.left = pct((variant.cds_start + Math.max(variant.cds_end, variant.cds_start + 1)) / 2) + "%";
+      bar.append(ghost);
+    });
+    bar.setAttribute("aria-label", "Copy " + (copyIndex ? "B" : "A") + " coding sequence" + (described.length ? " with " + described.join(", ") : " without alternate alleles"));
+    track.append(pins, bar);
+    const axis = element("div", "exon-axis");
+    axis.append(element("span", "start", "c.1"), element("span", "end", "c." + number(reference.length)));
+    track.append(axis);
+    copy.append(track);
+    if (!ids.length) copy.insertBefore(element("p", "no-edits", "No alternate coding alleles on this copy."), track);
+
+    const proteinLabel = element("div", "track-label");
+    proteinLabel.append(element("span", "", "Predicted protein"), element("span", "", haplotype.first_stop == null ? "no stop codon within the CDS" : "first stop at codon " + number(haplotype.first_stop)));
+    const protein = element("div", "protein-track");
+    protein.setAttribute("role", "img");
+    protein.setAttribute("aria-label", "Predicted translation of " + haplotype.protein_length + " amino acids, reference " + data.reference_protein_length);
+    const fillWidth = 100 * haplotype.protein_length / proteinScale;
+    const rail = element("span", "protein-rail");
+    const fill = tip(element("span", "protein-fill"), number(haplotype.protein_length) + " amino acids before the first stop");
+    fill.style.width = Math.max(0, Math.min(100, fillWidth)) + "%";
+    const refTick = tip(element("span", "ref-tick"), "Reference protein: " + number(data.reference_protein_length) + " aa");
+    refTick.style.left = Math.min(100, 100 * data.reference_protein_length / proteinScale) + "%";
+    protein.append(rail, fill, refTick);
+    if (haplotype.first_stop != null) {
+      const stop = tip(element("span", "stop-mark"), "First stop at codon " + number(haplotype.first_stop));
+      stop.style.left = Math.max(1.2, Math.min(98.8, fillWidth)) + "%";
+      protein.append(stop);
+    }
+    const proteinAxis = element("div", "protein-axis");
+    proteinAxis.append(element("span", "", "0"), element("span", "", number(proteinScale) + " aa"));
+    copy.append(proteinLabel, protein, proteinAxis);
+
+    const pills = element("ul", "pills");
+    (haplotype.consequences || []).forEach(function (key) { pills.append(element("li", "pill sev-" + consequenceTone(key), consequenceLabel(key))); });
+    if (pills.children.length) copy.append(pills);
+
+    const sequences = element("details", "sequence-details");
+    sequences.append(element("summary", "", "Sequences"));
+    sequences.addEventListener("toggle", function () {
+      if (!sequences.open || sequences.querySelector(".sequence-content")) return;
+      const sequence = sequencesFor(haplotype);
+      const content = element("div", "sequence-content");
+      content.append(element("h4", "", "Coding sequence · transcript orientation · " + number(sequence.cds.length) + " nt"), element("pre", "", sequence.cds),
+        element("h4", "", "Predicted translation · " + number(sequence.protein.length) + " aa"), element("pre", "", sequence.protein || "No amino acids before the first stop"));
+      sequences.append(content);
+    });
+    copy.append(sequences);
+    return copy;
+  }
+
+  /** Place pin labels in rows so none overlap, measuring their rendered widths. */
+  function layoutPins() {
+    document.querySelectorAll(".pin-layer").forEach(function (layer) {
+      const width = layer.clientWidth;
+      const rows = [];
+      const pins = Array.from(layer.children).map(function (pin) {
+        const label = pin.firstChild;
+        return { pin: pin, label: label, center: parseFloat(pin.style.left) / 100 * width, width: label.offsetWidth };
+      }).sort(function (a, b) { return a.center - b.center; });
+      pins.forEach(function (item) {
+        const left = Math.max(0, Math.min(width - item.width, item.center - item.width / 2));
+        let row = rows.findIndex(function (end) { return end + 6 <= left; });
+        if (row < 0) { row = rows.length; rows.push(0); }
+        rows[row] = left + item.width;
+        item.label.style.left = (left - item.center) + "px";
+        item.pin.style.height = (30 + row * 26) + "px";
+      });
+      layer.style.height = rows.length ? (30 + (rows.length - 1) * 26) + "px" : "0px";
+    });
+  }
+
+  /* ---------- Outcomes ---------- */
+
+  function renderOutcomes(groups, selected) {
+    const grid = byId("outcome-options");
+    grid.replaceChildren();
+    const visible = state.showAllOutcomes ? groups : groups.slice(0, OUTCOME_PREVIEW);
+    visible.forEach(function (group) {
+      const first = group[0];
+      const card = element("button", "outcome-card");
+      card.type = "button";
+      card.dataset.outcomeKey = first.outcome_key;
+      card.setAttribute("aria-pressed", String(first.outcome_key === selected.outcome_key));
+      const top = element("div", "outcome-top");
+      top.append(element("strong", "", "Outcome " + outcomeNumber.get(first.outcome_key)), element("span", "", plural(group.length, "arrangement")));
+      const glyph = element("div", "glyph");
+      first.haplotypes.forEach(function (haplotype, copyIndex) {
+        const row = element("div", "glyph-row");
+        row.style.setProperty("--g-color", copyIndex ? "var(--copy-b)" : "var(--copy-a)");
+        const rail = element("span", "glyph-rail");
+        const fill = element("span");
+        fill.style.width = Math.min(100, 100 * haplotype.protein_length / proteinScale) + "%";
+        const tick = element("i");
+        tick.style.left = Math.min(100, 100 * data.reference_protein_length / proteinScale) + "%";
+        rail.append(fill, tick);
+        row.append(element("b", "", copyIndex ? "B" : "A"), rail, element("span", "", number(haplotype.protein_length) + " aa"));
+        glyph.append(row);
+      });
+      const flags = element("div", "outcome-flags");
+      const kept = first.haplotypes.filter(function (haplotype) { return isReferenceCopy(haplotype, reference); }).length;
+      flags.append(element("span", kept ? "sev-good" : "sev-critical", kept ? plural(kept, "reference copy", "reference copies") : "No reference copy"));
+      const seen = new Set();
+      first.haplotypes.forEach(function (haplotype) {
+        (haplotype.consequences || []).forEach(function (key) {
+          if (DISRUPTIVE.indexOf(key) >= 0 && !seen.has(key)) { seen.add(key); flags.append(element("span", "sev-critical", consequenceLabel(key))); }
+        });
+      });
+      card.append(top, glyph, flags);
+      card.setAttribute("aria-label", "Outcome " + outcomeNumber.get(first.outcome_key) + ", " + plural(group.length, "arrangement") + ", copy proteins " + first.haplotypes.map(function (haplotype) { return haplotype.protein_length + " amino acids"; }).join(" and "));
+      card.addEventListener("click", function () { state.selectedId = first.id; renderSelected(); });
+      grid.append(card);
+    });
+    const more = byId("show-all-outcomes");
+    more.hidden = groups.length <= OUTCOME_PREVIEW;
+    more.textContent = state.showAllOutcomes ? "Show fewer outcomes" : "Show all " + number(groups.length) + " outcomes";
+  }
+
+  /* ---------- Evidence ---------- */
+
+  function renderEvidence() {
+    const summary = byId("evidence-summary");
+    const stack = element("div", "stack");
+    stack.setAttribute("role", "img");
+    const legend = element("div", "stack-legend");
+    const names = { reference: "Reference call", variant: "Variant call", unknown: "Unknown" };
+    stack.setAttribute("aria-label", ["reference", "variant", "unknown"].map(function (status) { return number(evidence.counts[status]) + " " + names[status].toLowerCase(); }).join(", "));
+    ["reference", "variant", "unknown"].forEach(function (status) {
+      const count = evidence.counts[status];
+      const share = evidence.total ? 100 * count / evidence.total : 0;
+      if (count > 0) {
+        const part = tip(element("span", "ev-" + status), names[status] + ": " + number(count) + " bases (" + share.toFixed(1) + "%)");
+        part.style.flex = String(count);
+        stack.append(part);
+      }
+      const item = element("div");
+      item.append(element("i", "ev-" + status), element("strong", "", number(count)), element("span", "", names[status].toLowerCase() + " bases"), element("small", "", share < 1 && count ? "<1%" : Math.round(share) + "%"));
+      legend.append(item);
+    });
+    summary.append(stack, legend);
+
+    const map = byId("evidence-map");
+    const head = element("div", "map-head");
+    head.append(element("span", "", "By coding position"), element("span", "", "c.1 → c." + number(reference.length) + " · " + (transcript.strand === "-" ? "reverse strand, shown 5′→3′" : "forward strand")));
+    const bar = element("div", "map-bar");
+    bar.setAttribute("role", "img");
+    bar.setAttribute("aria-label", "Evidence along the coding sequence; see the counts above.");
+    evidence.pieces.forEach(function (piece) {
+      const seg = element("span", "seg ev-" + piece.status);
+      seg.style.left = pct(piece.start) + "%";
+      seg.style.width = Math.max(0.25, pct(piece.end) - pct(piece.start)) + "%";
+      tip(seg, "c." + number(piece.start + 1) + "–" + number(piece.end) + "  ·  " + transcript.contig + ":" + number(piece.genomic[0] + 1) + "–" + number(piece.genomic[1]) + "\n" + names[piece.status] + (piece.detail ? "\n" + piece.detail : ""));
+      bar.append(seg);
+    });
+    exons.slice(1).forEach(function (exon) {
+      const gap = element("span", "exon-gap");
+      gap.style.left = pct(exon.start) + "%";
+      bar.append(gap);
+    });
+    const labels = element("div", "exon-labels");
+    exons.forEach(function (exon) {
+      const width = pct(exon.end) - pct(exon.start);
+      if (exons.length > 1 && width < 3) return;
+      const label = tip(element("span", "", exons.length > 12 || width < 8 ? String(exon.index + 1) : "Exon " + (exon.index + 1)), "Coding exon " + (exon.index + 1) + "\nc." + number(exon.start + 1) + "–" + number(exon.end) + "\n" + transcript.contig + ":" + number(exon.left + 1) + "–" + number(exon.right));
+      label.style.left = pct((exon.start + exon.end) / 2) + "%";
+      labels.append(label);
+    });
+    map.append(head, bar, labels);
   }
 
   function renderVariants() {
-    text("variant-count", number(variants.length) + " called coding variant" + (variants.length === 1 ? "" : "s"));
+    text("variant-count", plural(variants.length, "called coding variant"));
     const tbody = byId("variants-body");
     if (!variants.length) {
       const row = element("tr");
-      const cell = element("td", "", "No called coding variants in the supported input evidence."); cell.colSpan = 8; row.append(cell); tbody.append(row);
+      const cell = element("td", "", "No called coding variants in the supported input evidence."); cell.colSpan = 9; row.append(cell); tbody.append(row);
     }
     variants.forEach(function (variant) {
       const row = element("tr");
+      const changes = Array.from(new Set(variant.cds_alleles.filter(function (allele) { return allele.toUpperCase() !== variant.cds_ref.toUpperCase(); }).map(function (allele) { return changeLabel(variant, allele); })));
       const block = variant.block || variant.block_id;
-      [variant.id, transcript.contig + ":" + number(variant.pos + 1), variant.ref + " → " + Array.from(new Set(variant.alleles)).join(" / "), variant.gt.join(variant.phased ? "|" : "/"), variant.phase_set == null ? "—" : variant.phase_set, block ? blockName(block) : "Fixed", variant.gq == null ? "—" : variant.gq, variant.dp == null ? "—" : variant.dp].forEach(function (value, index) {
-        row.append(element("td", index < 6 ? "mono" : "", value));
+      [[variant.id, "mono"], [changes.join(", "), "mono"], [transcript.contig + ":" + number(variant.pos + 1), "mono"], [variant.ref + " → " + Array.from(new Set(variant.alleles)).join(" / "), "mono"],
+        [variant.gt.join(variant.phased ? "|" : "/"), "mono"], [variant.phase_set == null ? "—" : variant.phase_set, "mono"], [block ? blockName(block) : "Both copies", ""],
+        [variant.gq == null ? "—" : number(variant.gq), "num"], [variant.dp == null ? "—" : number(variant.dp), "num"]].forEach(function (cell) {
+        row.append(element("td", cell[1], cell[0]));
       });
       tbody.append(row);
     });
   }
+
+  /* ---------- Hypotheses ---------- */
 
   function renderConstraints() {
     const list = byId("active-constraints");
@@ -160,78 +630,42 @@
     text("constraint-count", state.constraints.length);
     byId("reset-constraints").disabled = !state.constraints.length;
     byId("hypothesis-badge").hidden = !state.constraints.length;
-    if (!state.constraints.length) list.append(element("li", "no-constraints", "All supported arrangements are available."));
+    if (!state.constraints.length) list.append(element("li", "no-constraints", "None yet. Every supported arrangement is shown."));
     state.constraints.forEach(function (constraint, index) {
       const row = element("li");
-      const relation = constraint.parity === 0 ? "same orientation" : "opposite orientation";
-      row.append(element("span", "", blockName(constraint.a) + " ↔ " + blockName(constraint.b) + " · " + relation));
+      const label = element("span", "", blockName(constraint.a) + " ↔ " + blockName(constraint.b));
+      label.append(element("span", "relation", constraint.parity === 0 ? "same" : "opposite"));
       const remove = element("button", "remove-constraint", "×");
       remove.type = "button";
       remove.setAttribute("aria-label", "Remove hypothesis between " + blockName(constraint.a) + " and " + blockName(constraint.b));
       remove.addEventListener("click", function () { state.constraints.splice(index, 1); update(); });
-      row.append(remove); list.append(row);
+      row.append(label, remove);
+      list.append(row);
     });
   }
 
-  function renderCopy(haplotype, index, maxProteinLength) {
-    const copy = element("article", "copy-track");
-    const heading = element("div", "copy-heading");
-    const label = element("h3", "copy-label");
-    label.append(element("span", "copy-dot"), document.createTextNode("Copy " + (index + 1)));
-    const isReference = haplotype.cds === transcript.reference_cds;
-    heading.append(label, element("span", "copy-status" + (isReference ? " reference-identical" : ""), isReference ? "Reference-identical CDS" : "Altered CDS"));
-    copy.append(heading);
-    const description = element("div", "track-description");
-    description.append(element("span", "", "Coding variants"), element("span", "", number(haplotype.cds.length) + " nt · reference CDS positions"));
-    copy.append(description);
-    const ribbon = element("div", "ribbon cds-ribbon");
-    ribbon.setAttribute("role", "img");
-    ribbon.setAttribute("aria-label", "Coding variant positions on copy " + (index + 1));
-    const variantLabels = element("div", "variant-labels");
-    (haplotype.variant_ids || []).forEach(function (id) {
-      const variant = variantLookup.get(id);
-      if (!variant) return;
-      const marker = element("span", "variant-mark");
-      const start = Math.max(0, Math.min(99.7, 100 * variant.cds_start / Math.max(1, transcript.reference_cds.length)));
-      marker.style.left = start + "%";
-      marker.style.width = Math.min(100 - start, Math.max(.3, 100 * (variant.cds_end - variant.cds_start) / Math.max(1, transcript.reference_cds.length))) + "%";
-      marker.title = variant.id + " · " + describeVariant(variant);
-      ribbon.append(marker);
-      const chip = element("span", "variant-label", id);
-      chip.title = describeVariant(variant);
-      variantLabels.append(chip);
+  function renderInformative() {
+    const pairs = (data.informative_pairs || []).filter(function (pair) { return pair.score > 0 && blockLookup.has(pair.block_a) && blockLookup.has(pair.block_b); });
+    if (!pairs.length) return;
+    byId("informative-section").hidden = false;
+    const best = pairs[0].score;
+    pairs.slice(0, 5).forEach(function (pair) {
+      const button = element("button", "informative-button");
+      button.type = "button";
+      tip(button, pair.description || "Select these blocks for a hypothetical orientation relationship");
+      const bar = element("span", "bar");
+      const fill = element("span");
+      fill.style.width = (100 * pair.score / best) + "%";
+      bar.append(fill);
+      button.append(element("span", "", blockName(pair.block_a) + " ↔ " + blockName(pair.block_b)), element("span", "score", plural(pair.score, "outcome pair")), bar);
+      button.addEventListener("click", function () {
+        byId("block-a").value = String(pair.block_a); byId("block-b").value = String(pair.block_b); validatePair(); byId("relationship-same").focus();
+      });
+      byId("informative-pairs").append(button);
     });
-    if (!(haplotype.variant_ids || []).length) variantLabels.append(element("span", "no-edits", "No listed alternate coding alleles on this copy"));
-    copy.append(ribbon, variantLabels);
-    const protein = element("div", "protein-track");
-    const proteinLabel = element("div", "track-description");
-    proteinLabel.append(element("span", "", "Protein"), element("span", "", number(haplotype.protein_length) + " aa" + (haplotype.first_stop == null ? " · no stop in CDS" : " · first stop at " + number(haplotype.first_stop))));
-    const proteinRibbon = element("div", "ribbon");
-    proteinRibbon.setAttribute("role", "img");
-    proteinRibbon.setAttribute("aria-label", "Predicted translation of " + haplotype.protein_length + " amino acids" + (haplotype.first_stop == null ? " without a stop within supplied CDS" : "; first stop at position " + haplotype.first_stop));
-    const fill = element("span", "protein-fill");
-    const lengthPercent = Math.max(0, Math.min(100, 100 * haplotype.protein_length / maxProteinLength));
-    fill.style.width = lengthPercent + "%";
-    proteinRibbon.append(fill);
-    if (haplotype.first_stop != null) {
-      const stop = element("span", "stop-mark");
-      stop.style.left = Math.min(99.8, lengthPercent) + "%";
-      stop.title = "First stop at amino-acid position " + haplotype.first_stop;
-      proteinRibbon.append(stop);
-    }
-    const axis = element("div", "track-axis");
-    axis.append(element("span", "", "0"), element("span", "", number(maxProteinLength) + " aa · shared scale"));
-    protein.append(proteinLabel, proteinRibbon, axis); copy.append(protein);
-    const consequences = element("ul", "consequences");
-    (haplotype.consequences || []).forEach(function (consequence) { consequences.append(element("li", "", String(consequence).replace(/_/g, " "))); });
-    copy.append(consequences);
-    const sequences = element("details", "sequence-details");
-    sequences.append(element("summary", "", "View sequences"));
-    const sequenceContent = element("div", "sequence-content");
-    sequenceContent.append(element("h4", "", "CODING SEQUENCE · TRANSCRIPT ORIENTATION"), element("pre", "", haplotype.cds), element("h4", "", "PREDICTED TRANSLATION"), element("pre", "", haplotype.protein || "No translated amino acids before the first stop"));
-    sequences.append(sequenceContent); copy.append(sequences);
-    return copy;
   }
+
+  /* ---------- Selection ---------- */
 
   function renderSelected() {
     const selected = state.compatible.find(function (scenario) { return scenario.id === state.selectedId; });
@@ -240,14 +674,11 @@
     const index = state.compatible.indexOf(selected);
     byId("previous-scenario").disabled = index === 0;
     byId("next-scenario").disabled = index === state.compatible.length - 1;
-    const orientations = byId("orientation-row");
-    orientations.replaceChildren();
-    blocks.forEach(function (block) { const pill = element("span", "orientation-pill", blockName(block.id) + " · orientation " + selected.orientations[block.id]); pill.title = block.label; orientations.append(pill); });
-    if (!blocks.length) orientations.append(element("span", "orientation-pill", "No heterozygous phase blocks"));
+    renderBlocks(selected);
     const tracks = byId("copy-tracks");
-    tracks.replaceChildren();
-    selected.haplotypes.forEach(function (haplotype, copyIndex) { tracks.append(renderCopy(haplotype, copyIndex, proteinScale)); });
-    byId("outcome-options").querySelectorAll("button").forEach(function (button) { button.setAttribute("aria-pressed", String(button.dataset.outcomeKey === selected.outcome_key)); });
+    tracks.replaceChildren(renderCopy(selected, 0), renderCopy(selected, 1));
+    layoutPins();
+    byId("outcome-options").querySelectorAll(".outcome-card").forEach(function (card) { card.setAttribute("aria-pressed", String(card.dataset.outcomeKey === selected.outcome_key)); });
   }
 
   function update() {
@@ -256,69 +687,79 @@
     const groups = groupScenarios(state.compatible);
     text("compatible-count", number(state.compatible.length));
     text("outcome-count", number(groups.length));
-    text("outcome-summary-count", number(groups.length) + " outcome" + (groups.length === 1 ? "" : "s"));
-    const referenceCounts = state.compatible.map(function (scenario) { return scenario.haplotypes.filter(function (haplotype) { return haplotype.cds === transcript.reference_cds; }).length; });
-    const min = Math.min.apply(null, referenceCounts);
-    const max = Math.max.apply(null, referenceCounts);
+    renderVerdict();
     const proteinCount = new Set(state.compatible.map(function (scenario) { return scenario.protein_outcome_key; })).size;
-    const proteinExplanation = state.compatible.length && state.compatible.every(function (scenario) { return Boolean(scenario.protein_outcome_key); }) ? proteinCount + " predicted protein outcome" + (proteinCount === 1 ? ". " : "s. ") : "";
-    text("result-explanation", state.compatible.length ? proteinExplanation + (min === max ? String(min) : min + "–" + max) + " reference-identical coding " + (min === max && min === 1 ? "copy" : "copies") + " across the compatible arrangements. Unknown evidence still limits interpretation." : "Conflicting orientation hypotheses exclude every supported arrangement.");
+    const hasProteinKeys = state.compatible.length && state.compatible.every(function (scenario) { return Boolean(scenario.protein_outcome_key); });
+    text("result-explanation", state.compatible.length
+      ? "Arrangements that produce the same pair of coding sequences are grouped." + (hasProteinKeys ? " They yield " + plural(proteinCount, "distinct predicted protein outcome") + "." : "") + " Select one to view it above."
+      : "Conflicting hypotheses exclude every supported arrangement.");
     byId("empty-state").hidden = state.compatible.length > 0;
     byId("results-content").hidden = !state.compatible.length;
+    byId("outcome-options").hidden = !state.compatible.length;
     const select = byId("scenario-select");
     select.replaceChildren();
-    state.compatible.forEach(function (scenario, index) {
-      select.append(option(scenario.id, "Arrangement " + (index + 1) + " of " + state.compatible.length));
+    state.compatible.forEach(function (scenario) {
+      select.append(option(scenario.id, "Arrangement " + number(scenarioNumber.get(scenario.id)) + " · outcome " + outcomeNumber.get(scenario.outcome_key)));
     });
+    select.disabled = state.compatible.length < 2;
     if (!state.compatible.some(function (scenario) { return scenario.id === state.selectedId; })) state.selectedId = state.compatible.length ? state.compatible[0].id : null;
-    const options = byId("outcome-options");
-    options.replaceChildren();
-    groups.forEach(function (group, index) {
-      const first = group[0];
-      const button = element("button", "outcome-button");
-      button.type = "button";
-      button.dataset.outcomeKey = first.outcome_key;
-      button.setAttribute("aria-pressed", "false");
-      button.append(element("strong", "", "Outcome " + (index + 1)), element("span", "", first.haplotypes.map(function (haplotype) { return number(haplotype.protein_length) + " aa"; }).join(" + ")), element("span", "", group.length + " compatible arrangement" + (group.length === 1 ? "" : "s")));
-      button.addEventListener("click", function () { state.selectedId = first.id; renderSelected(); });
-      options.append(button);
-    });
+    const selected = state.compatible.find(function (scenario) { return scenario.id === state.selectedId; });
+    if (selected) renderOutcomes(groups, selected);
+    else byId("show-all-outcomes").hidden = true;
     renderSelected();
   }
 
   function reset() { state.constraints = []; update(); }
 
-  text("gene-title", transcript.gene || transcript.id);
-  text("locus-meta", "Sample " + data.sample + "  /  " + transcript.id + "  /  " + transcript.contig + "  /  " + (transcript.strand === "-" ? "reverse" : "forward") + " strand");
-  text("source-meta", data.source ? "Source: " + data.source : "Source metadata unavailable");
-  text("total-arrangements", number(scenarios.length));
-  text("total-outcomes", number(groupScenarios(scenarios).length));
-  byId("synthetic-label").hidden = data.synthetic !== true;
-  if (Number.isInteger(data.protein_outcome_count)) {
-    byId("protein-summary").hidden = false;
-    text("total-protein-outcomes", number(data.protein_outcome_count));
+  function validatePair() { byId("add-constraint").disabled = byId("block-a").value === byId("block-b").value; }
+
+  /* ---------- Tooltip ---------- */
+
+  function setupTooltip() {
+    const tooltip = byId("tooltip");
+    let active = null;
+    function show(target, x, y) {
+      active = target;
+      tooltip.textContent = target.dataset.tip;
+      tooltip.hidden = false;
+      const box = tooltip.getBoundingClientRect();
+      const left = Math.max(8, Math.min(window.innerWidth - box.width - 8, x - box.width / 2));
+      const top = y - box.height - 12 < 8 ? y + 18 : y - box.height - 12;
+      tooltip.style.left = left + "px";
+      tooltip.style.top = top + "px";
+    }
+    function hide() { active = null; tooltip.hidden = true; }
+    document.addEventListener("pointermove", function (event) {
+      const target = event.target.closest ? event.target.closest("[data-tip]") : null;
+      if (!target) { if (active) hide(); return; }
+      show(target, event.clientX, event.clientY);
+    });
+    document.addEventListener("focusin", function (event) {
+      const target = event.target.closest ? event.target.closest("[data-tip]") : null;
+      if (!target) return;
+      const box = target.getBoundingClientRect();
+      show(target, box.left + box.width / 2, box.top);
+    });
+    document.addEventListener("focusout", hide);
+    document.addEventListener("scroll", hide, { passive: true });
+    document.addEventListener("keydown", function (event) { if (event.key === "Escape") hide(); });
   }
-  document.title = "PhaseSpace · " + (transcript.gene || transcript.id) + " · " + data.sample;
-  if ((data.warnings || []).length) {
-    byId("warning-panel").hidden = false;
-    data.warnings.forEach(function (warning) { byId("warnings").append(element("li", "", warning)); });
-  }
+
+  /* ---------- Wiring ---------- */
+
+  renderIdentity();
   renderEvidence();
   renderVariants();
   blocks.forEach(function (block) {
-    const tag = element("span", "block-tag");
-    tag.append(element("strong", "", blockName(block.id)), document.createTextNode(" · " + block.variant_ids.length + " variant" + (block.variant_ids.length === 1 ? "" : "s")));
-    tag.title = block.label + " · " + block.variant_ids.join(", ");
-    byId("phase-blocks").append(tag);
     ["block-a", "block-b"].forEach(function (id) { const item = option(block.id, blockName(block.id)); item.title = block.label; byId(id).append(item); });
   });
   if (blocks.length > 1) byId("block-b").value = String(blocks[1].id);
   else {
     byId("constraint-form").hidden = true;
-    byId("constraint-help").parentElement.open = true;
-    text("constraint-help", blocks.length ? "One phase block is already internally oriented. Swapping both copy labels does not create a different coding outcome." : "No heterozygous phase blocks are available to constrain. Both copies still depend on the supplied evidence.");
+    text("constraint-help", blocks.length
+      ? "There is only one phase block, and it is already internally oriented. Swapping the copy labels does not create a different coding outcome."
+      : "No heterozygous phase blocks are available to relate. Both copies follow directly from the included calls.");
   }
-  function validatePair() { byId("add-constraint").disabled = byId("block-a").value === byId("block-b").value; }
   byId("block-a").addEventListener("change", validatePair);
   byId("block-b").addEventListener("change", validatePair);
   byId("constraint-form").addEventListener("submit", function (event) {
@@ -326,7 +767,7 @@
     const a = byId("block-a").value;
     const b = byId("block-b").value;
     if (a === b || !blockLookup.has(a) || !blockLookup.has(b)) return;
-    const parity = Number(byId("relationship").value);
+    const parity = Number(document.querySelector("input[name='relationship']:checked").value);
     const existing = state.constraints.findIndex(function (constraint) { return (constraint.a === a && constraint.b === b) || (constraint.a === b && constraint.b === a); });
     const constraint = { a: a, b: b, parity: parity };
     if (existing < 0) state.constraints.push(constraint); else state.constraints[existing] = constraint;
@@ -334,37 +775,21 @@
   });
   byId("reset-constraints").addEventListener("click", reset);
   byId("empty-reset").addEventListener("click", reset);
+  byId("show-all-outcomes").addEventListener("click", function () { state.showAllOutcomes = !state.showAllOutcomes; update(); });
   byId("scenario-select").addEventListener("change", function () {
     const selected = state.compatible.find(function (scenario) { return String(scenario.id) === byId("scenario-select").value; });
     if (selected) state.selectedId = selected.id;
     renderSelected();
   });
-  byId("previous-scenario").addEventListener("click", function () {
+  function step(delta) {
     const index = state.compatible.findIndex(function (scenario) { return scenario.id === state.selectedId; });
-    if (index > 0) state.selectedId = state.compatible[index - 1].id;
-    renderSelected();
-  });
-  byId("next-scenario").addEventListener("click", function () {
-    const index = state.compatible.findIndex(function (scenario) { return scenario.id === state.selectedId; });
-    if (index < state.compatible.length - 1) state.selectedId = state.compatible[index + 1].id;
-    renderSelected();
-  });
-  const pairs = (data.informative_pairs || []).filter(function (pair) { return pair.score > 0 && blockLookup.has(pair.block_a) && blockLookup.has(pair.block_b); });
-  if (pairs.length) {
-    byId("informative-section").hidden = false;
-    pairs.slice(0, 5).forEach(function (pair) {
-      const button = element("button", "informative-button");
-      button.type = "button";
-      button.title = pair.description || "Select these blocks for a hypothetical orientation relationship";
-      button.append(element("span", "", blockName(pair.block_a) + " ↔ " + blockName(pair.block_b)), element("span", "", "Explore →"));
-      button.addEventListener("click", function () {
-        byId("block-a").value = String(pair.block_a); byId("block-b").value = String(pair.block_b); validatePair(); byId("relationship").focus();
-      });
-      byId("informative-pairs").append(button);
-    });
+    const next = state.compatible[index + delta];
+    if (next) { state.selectedId = next.id; renderSelected(); }
   }
+  byId("previous-scenario").addEventListener("click", function () { step(-1); });
+  byId("next-scenario").addEventListener("click", function () { step(1); });
   byId("download-json").addEventListener("click", function () {
-    const exported = { analysis: data, exploration: { hypothetical: true, constraints: state.constraints, selected_scenario_id: state.selectedId } };
+    const exported = { analysis: expandAnalysis(data), exploration: { hypothetical: true, constraints: state.constraints, selected_scenario_id: state.selectedId } };
     const blob = new Blob([JSON.stringify(exported, null, 2) + "\n"], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const link = element("a");
@@ -373,6 +798,10 @@
     document.body.append(link); link.click(); link.remove();
     setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
   });
+  let frame = 0;
+  window.addEventListener("resize", function () { cancelAnimationFrame(frame); frame = requestAnimationFrame(layoutPins); });
+  setupTooltip();
+  renderInformative();
   validatePair();
   update();
 })();

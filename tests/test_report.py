@@ -120,3 +120,120 @@ assert.equal(sharedProteinScale([scenarios[2]], 0), 1);
 assert.equal(JSON.stringify(scenarios), snapshot);
 """
     subprocess.run(["node", "-e", test, str(javascript)], check=True, capture_output=True, text=True)
+
+
+def _embedded(html):
+    match = re.search(r'<script id="phasespace-data" type="application/json">(.*?)</script>', html, re.S)
+    return json.loads(match.group(1))
+
+
+def _joint_edit_result():
+    from phasespace.analysis import analyze
+    from phasespace.models import Evidence, Locus, Transcript, Variant
+
+    reference = "ATGCAACAAGGGAAACCCNTTGGGTAA"
+
+    def call(identifier, start, ref, alleles, gt, phased=False, ps=None):
+        return Variant(identifier, start + 100, ref, alleles, gt, phased, ps, start, start + len(ref), ref, alleles, 60, 20)
+
+    variants = [
+        call("stop", 3, "C", ("C", "T"), (0, 1)),
+        call("ins", 8, "A", ("AT", "A"), (1, 0), True, "7"),
+        call("del", 13, "AA", ("AA", "A"), (0, 1), True, "7"),
+        call("multi", 16, "C", ("G", "T"), (1, 2)),
+        call("hom", 22, "G", ("A", "A"), (1, 1)),
+    ]
+    transcript = Transcript("tx1", "GENE", "chr1", "+", ((100, 100 + len(reference)),), reference)
+    return analyze(Locus(transcript, "sample1", variants, [Evidence(100, 127, "unknown")]))
+
+
+def test_report_embeds_edits_instead_of_full_sequences(tmp_path):
+    result = _joint_edit_result()
+    output = tmp_path / "report.html"
+    write_report(result, output)
+    embedded = _embedded(output.read_text())
+    assert embedded["report_encoding"] == "edits"
+    copies = [copy for scenario in embedded["scenarios"] for copy in scenario["haplotypes"]]
+    assert copies and all("cds" not in copy and "protein" not in copy and "alleles" in copy for copy in copies)
+    # Nothing else in the analysis changes.
+    full = json.loads(json.dumps(result))
+    for key in full:
+        if key != "scenarios":
+            assert embedded[key] == full[key]
+
+
+def test_compact_report_size_does_not_scale_with_sequence_per_arrangement(tmp_path):
+    from phasespace.analysis import analyze
+    from phasespace.models import Evidence, Locus, Transcript, Variant
+
+    reference = "ATG" + "GCT" * 1998 + "TAA"
+    variants = [Variant(str(i), 10 + 300 * i, "C", ("C", "A"), (0, 1), False, None, 10 + 300 * i, 11 + 300 * i, "C", ("C", "A"), 60, 30)
+                for i in range(8)]
+    transcript = Transcript("tx", "G", "c", "+", ((0, len(reference)),), reference)
+    result = analyze(Locus(transcript, "s", variants, [Evidence(0, len(reference), "reference")]))
+    output = tmp_path / "report.html"
+    write_report(result, output)
+    assert len(json.dumps(result)) > 2_000_000
+    assert output.stat().st_size < 250_000
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="Node is needed for browser logic test")
+def test_browser_rebuilds_exact_analysis_from_compact_report(tmp_path):
+    result = _joint_edit_result()
+    output = tmp_path / "report.html"
+    write_report(result, output)
+    compact = tmp_path / "compact.json"
+    compact.write_text(json.dumps(_embedded(output.read_text())))
+    expected = tmp_path / "expected.json"
+    expected.write_text(json.dumps(result))
+    javascript = Path(__file__).parents[1] / "src" / "phasespace" / "assets" / "report.js"
+    test = r"""
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const core = require(process.argv[1]);
+const compact = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+const expected = JSON.parse(fs.readFileSync(process.argv[3], 'utf8'));
+const snapshot = JSON.stringify(compact);
+assert.deepEqual(core.expandAnalysis(compact), expected);
+assert.equal(JSON.stringify(compact), snapshot);
+// Translation matches the engine: N codons become X and stop ends the protein.
+assert.equal(core.translate('ATGNAATAAGGG'), 'MX');
+assert.equal(core.translate('ATGAA'), 'M');
+"""
+    subprocess.run(["node", "-e", test, str(javascript), str(compact), str(expected)], check=True, capture_output=True, text=True)
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="Node is needed for browser logic test")
+def test_browser_verdict_flip_and_change_labels():
+    javascript = Path(__file__).parents[1] / "src" / "phasespace" / "assets" / "report.js"
+    test = r"""
+const assert = require('node:assert/strict');
+const core = require(process.argv[1]);
+const ref = {consequences: ['reference']};
+const alt = {consequences: ['stop_gained']};
+const cis = {id: 'cis', orientations: {A: 0, B: 0, C: 0}, haplotypes: [ref, alt]};
+const trans = {id: 'trans', orientations: {A: 0, B: 1, C: 0}, haplotypes: [alt, alt]};
+assert.equal(core.phaseVerdict([cis], 'X').tone, 'good');
+assert.equal(core.phaseVerdict([trans], 'X').tone, 'none');
+assert.deepEqual(core.phaseVerdict([cis, trans], 'X'), {tone: 'mixed', total: 2, keep: 1, min: 0, max: 1});
+assert.equal(core.phaseVerdict([], 'X').tone, 'empty');
+// Older results without consequence labels compare full sequences.
+assert.equal(core.phaseVerdict([{haplotypes: [{cds: 'X'}, {cds: 'Y'}]}], 'X').tone, 'good');
+
+const all = [0, 1].flatMap(b => [0, 1].map(c => ({id: `${b}${c}`, orientations: {A: 0, B: b, C: c}})));
+assert.equal(core.flipTarget(all, ['A', 'B', 'C'], all[0], 'B').id, '10');
+assert.equal(core.flipTarget(all, ['A', 'B', 'C'], all[0], 'C').id, '01');
+// The first block is fixed: flipping it is the same as flipping every other block.
+assert.equal(core.flipTarget(all, ['A', 'B', 'C'], all[0], 'A').id, '11');
+assert.equal(core.flipTarget([all[0]], ['A'], all[0], 'A'), null);
+
+const v = (start, ref) => ({cds_start: start, cds_end: start + ref.length, cds_ref: ref});
+assert.equal(core.changeLabel(v(21, 'C'), 'T'), 'c.22C>T');
+assert.equal(core.changeLabel(v(30, 'CCA'), 'C'), 'c.32_33del');
+assert.equal(core.changeLabel(v(30, 'CA'), 'C'), 'c.32del');
+assert.equal(core.changeLabel(v(30, 'GTC'), 'C'), 'c.31_32del');
+assert.equal(core.changeLabel(v(8, 'A'), 'AT'), 'c.9_10insT');
+assert.equal(core.changeLabel(v(8, 'A'), 'TA'), 'c.8_9insT');
+assert.equal(core.changeLabel(v(4, 'AC'), 'GT'), 'c.5_6delinsGT');
+"""
+    subprocess.run(["node", "-e", test, str(javascript)], check=True, capture_output=True, text=True)

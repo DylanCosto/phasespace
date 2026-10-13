@@ -3,63 +3,151 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="light">
+  <meta name="color-scheme" content="light dark">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'">
-  <title>PhaseSpace · Gene copy explorer</title>
+  <title>PhaseSpace report</title>
   <style>/* PHASESPACE_CSS */</style>
 </head>
 <body>
-  <a class="skip-link" href="#main">Skip to analysis</a>
-  <header class="site-header">
-    <a href="#main" class="brand" aria-label="PhaseSpace, go to report"><svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true"><path d="M6 6v20M16 6v20M26 6v20"/><path d="M6 11h10M16 21h10"/></svg><span>PhaseSpace</span><span class="brand-sub">Gene copy explorer</span></a>
-    <div class="header-actions"><span class="local-badge"><i aria-hidden="true"></i>Local report</span><button id="download-json" class="button button-header" type="button">Export analysis <span aria-hidden="true">↗</span></button></div>
-  </header>
-  <main id="main">
-    <section class="intro" aria-labelledby="gene-title">
-      <div class="gene-identity"><div class="eyebrow">Transcript analysis <span id="synthetic-label" class="synthetic-label" hidden>Synthetic demo</span></div><h1 id="gene-title">PhaseSpace report</h1><p id="locus-meta" class="meta"></p></div>
-      <div class="intro-summary" aria-label="All supported possibilities"><div><strong id="total-arrangements">—</strong><span>arrangements</span></div><div><strong id="total-outcomes">—</strong><span>CDS outcomes</span></div><div id="protein-summary" hidden><strong id="total-protein-outcomes">—</strong><span>protein outcomes</span></div></div>
-    </section>
-    <nav class="report-nav" aria-label="Report sections"><a href="#outcomes-heading" class="nav-primary">Gene copies</a><a href="#evidence-heading">Coding evidence</a><a href="#report-notes">Report notes</a><span>Single-sample analysis</span></nav>
-    <div class="workspace">
-      <section class="panel outcomes" aria-labelledby="outcomes-heading">
-        <div class="section-heading"><div><h2 id="outcomes-heading">Gene copies</h2><p class="section-description">Compare the two predicted coding sequences.</p></div><span id="hypothesis-badge" class="hypothesis-badge" hidden>Hypothesis applied</span></div>
-        <div class="result-strip" aria-live="polite" aria-atomic="true"><div><strong id="compatible-count">—</strong><span>compatible arrangements</span></div><div><strong id="outcome-count">—</strong><span>distinct CDS outcomes</span></div><p id="result-explanation"></p></div>
-        <div id="empty-state" class="empty-state" hidden><span aria-hidden="true">∅</span><h3>No compatible arrangements</h3><p>These hypotheses cannot all hold at once. Remove a relationship or reset the constraints.</p><button id="empty-reset" type="button" class="button">Reset hypotheses</button></div>
-        <div id="results-content">
-          <div class="scenario-navigation"><label for="scenario-select">Viewing<select id="scenario-select"></select></label><div class="navigation-buttons"><button id="previous-scenario" class="button icon-button" type="button" aria-label="Previous arrangement">←</button><button id="next-scenario" class="button icon-button" type="button" aria-label="Next arrangement">→</button></div></div>
-          <div id="orientation-row" class="orientation-row"></div>
-          <div class="track-legend"><span><i class="variant-line"></i>Alternate allele</span><span><i class="stop-line"></i>First stop</span><span>Protein lengths share a fixed scale</span></div>
-          <div id="copy-tracks" class="copy-tracks"></div>
-          <details class="outcome-details"><summary>Compare coding outcomes<span id="outcome-summary-count" class="summary-hint"></span></summary><div id="outcome-options" class="outcome-options"></div></details>
-        </div>
-        <p class="interpretation-note"><strong>Sequence predictions, with limits.</strong> Reference-identical CDS does not establish protein function. Unknown evidence remains unknown. Copy labels are interchangeable; no phase probabilities are assigned.</p>
-      </section>
-      <aside class="panel hypotheses" aria-labelledby="hypotheses-heading">
-        <div class="aside-title"><span class="control-icon" aria-hidden="true">⇄</span><span>HYPOTHESIS</span></div>
-        <h2 id="hypotheses-heading">Explore phase</h2>
-        <p class="aside-copy">Choose how two blocks are oriented to compare the resulting gene copies.</p>
-        <div id="phase-blocks" class="phase-blocks"></div>
-        <form id="constraint-form">
-          <div class="block-pickers"><label>First block<select id="block-a" aria-label="First phase block"></select></label><span aria-hidden="true">↔</span><label>Second block<select id="block-b" aria-label="Second phase block"></select></label></div>
-          <label class="relation-label">Relationship<select id="relationship"><option value="0">Same block orientation</option><option value="1">Opposite block orientation</option></select></label>
-          <button class="button button-primary add-button" id="add-constraint" type="submit">Apply hypothesis <span aria-hidden="true">→</span></button>
-        </form>
-        <p class="hypothesis-note">Exploratory only. Your observed evidence stays unchanged.</p>
-        <details class="control-help"><summary>How block orientation works</summary><p id="constraint-help" class="small-note">For single 0/1 variants, same/opposite orientation corresponds to cis/trans. Within a phased block, 1|0 and 0|1 point in opposite directions. These controls relate whole blocks.</p></details>
-        <div class="active-heading"><h3>Active hypotheses <span id="constraint-count">0</span></h3><button id="reset-constraints" class="text-button" type="button">Reset</button></div>
-        <ul id="active-constraints" class="constraint-list"></ul>
-        <div id="informative-section" class="informative-section" hidden><h3>Worth exploring</h3><p class="small-note">Relationships that separate predicted protein outcomes. No probabilities implied.</p><div id="informative-pairs"></div></div>
-      </aside>
+  <a class="skip-link" href="#main">Skip to report</a>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="brand">
+        <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true"><path class="strand-a" d="M4 10c8 0 8 12 16 12h8"/><path class="strand-b" d="M4 22c8 0 8-12 16-12h8"/><circle class="strand-a-dot" cx="27" cy="22" r="2.6"/><circle class="strand-b-dot" cx="27" cy="10" r="2.6"/></svg>
+        <span class="brand-name">PhaseSpace</span>
+        <span class="brand-divider" aria-hidden="true"></span>
+        <span class="brand-sub">Phase consequence report</span>
+      </div>
+      <div class="topbar-actions">
+        <span class="privacy-pill" title="This report is one self-contained file. It makes no network requests."><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="7" width="10" height="7" rx="1.5"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"/></svg>Local file · no network</span>
+        <button id="download-json" class="btn btn-quiet" type="button"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2v8m0 0 3-3m-3 3L5 7M3 12.5h10"/></svg>Export JSON</button>
+      </div>
     </div>
-    <section class="panel evidence-panel" aria-labelledby="evidence-heading">
-      <div class="section-heading"><div><h2 id="evidence-heading">Coding evidence</h2><p class="section-description">Reference calls, variant calls, and unknown intervals.</p></div><div class="legend"><span><i class="swatch reference"></i>Reference call</span><span><i class="swatch variant"></i>Variant call</span><span><i class="swatch unknown"></i>Unknown</span></div></div>
-      <div id="evidence-map" class="evidence-map"></div>
-      <p class="small-note evidence-note">Only coding intervals are shown. Missing VCF records remain unknown; reference calls describe supplied evidence, not biological function.</p>
-      <details class="variant-details"><summary><span id="variant-count">Variants</span><span class="summary-hint">Genotypes, phase sets &amp; call quality</span></summary><div class="table-scroll"><table><caption class="sr-only">Called coding variants used in the analysis</caption><thead><tr><th>Variant</th><th>Position</th><th>Alleles</th><th>GT</th><th>PS</th><th>Block</th><th>GQ</th><th>DP</th></tr></thead><tbody id="variants-body"></tbody></table></div></details>
+  </header>
+
+  <main id="main">
+    <section class="hero" aria-labelledby="gene-title">
+      <div class="hero-identity">
+        <p class="eyebrow"><span id="sample-label">Sample</span><span id="synthetic-label" class="tag tag-demo" hidden>Synthetic demo</span></p>
+        <h1><span id="gene-title">PhaseSpace report</span><span id="transcript-id" class="transcript-id"></span></h1>
+        <p id="locus-meta" class="locus-meta"></p>
+      </div>
+      <div id="verdict" class="verdict" aria-live="polite" aria-atomic="true">
+        <div class="verdict-icon" aria-hidden="true"></div>
+        <div><p class="verdict-kicker">Across compatible arrangements</p><p id="verdict-title" class="verdict-title"></p><p id="verdict-detail" class="verdict-detail"></p></div>
+      </div>
+      <dl class="stats">
+        <div class="stat"><dt>Arrangements</dt><dd id="total-arrangements">—</dd><p class="stat-note" id="arrangements-note"></p></div>
+        <div class="stat"><dt>Coding outcomes</dt><dd id="total-outcomes">—</dd><p class="stat-note">distinct pairs of CDS sequences</p></div>
+        <div class="stat" id="protein-summary" hidden><dt>Protein outcomes</dt><dd id="total-protein-outcomes">—</dd><p class="stat-note">distinct predicted products</p></div>
+        <div class="stat"><dt>CDS with called evidence</dt><dd id="coverage-stat">—</dd><div class="stat-meter" aria-hidden="true"><span id="coverage-meter"></span></div></div>
+      </dl>
     </section>
-    <section id="report-notes" class="report-notes" aria-labelledby="notes-heading"><div><h2 id="notes-heading">About this report</h2><p id="source-meta" class="source-meta"></p></div><div id="warning-panel" class="notice" hidden><h3>Interpretation notes</h3><ul id="warnings"></ul></div></section>
-    <footer><span class="footer-brand">PhaseSpace <span>/</span> Gene copy explorer</span><span><i class="privacy-dot" aria-hidden="true"></i>Self-contained. Private by design. No network requests.</span></footer>
+
+    <div class="layout">
+      <section class="card stage" aria-labelledby="copies-heading">
+        <header class="card-head">
+          <div>
+            <h2 id="copies-heading">Gene copies</h2>
+            <p class="card-sub">The two coding sequences predicted for one phase arrangement. Copy labels are interchangeable.</p>
+          </div>
+          <div class="stage-nav">
+            <span id="hypothesis-badge" class="tag tag-hypo" hidden>Hypothesis applied</span>
+            <div class="stepper">
+              <button id="previous-scenario" class="btn btn-icon" type="button" aria-label="Previous arrangement"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10 3 5 8l5 5"/></svg></button>
+              <label class="sr-only" for="scenario-select">Arrangement</label>
+              <select id="scenario-select"></select>
+              <button id="next-scenario" class="btn btn-icon" type="button" aria-label="Next arrangement"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m6 3 5 5-5 5"/></svg></button>
+            </div>
+          </div>
+        </header>
+        <div id="empty-state" class="empty-state" hidden>
+          <div class="empty-glyph" aria-hidden="true">∅</div>
+          <h3>No arrangement fits these hypotheses</h3>
+          <p>The relationships you applied contradict each other. Remove one, or reset to see every supported arrangement.</p>
+          <button id="empty-reset" type="button" class="btn btn-primary">Reset hypotheses</button>
+        </div>
+        <div id="results-content">
+          <div class="subhead"><h3>Phase blocks</h3><p>Each block keeps its internal phase. Flip a block to move its alleles to the other copy.</p></div>
+          <div id="block-strip" class="block-strip"></div>
+          <div id="copy-tracks" class="copies"></div>
+          <div class="stage-legend" aria-hidden="true">
+            <span><i class="lg-pin"></i>Alternate allele on this copy</span>
+            <span><i class="lg-ghost"></i>Alternate allele on the other copy</span>
+            <span><i class="lg-ref"></i>Reference protein length</span>
+            <span><i class="lg-stop"></i>First stop</span>
+          </div>
+        </div>
+      </section>
+
+      <aside class="card panel" aria-labelledby="hypotheses-heading">
+        <h2 id="hypotheses-heading">Test a phase hypothesis</h2>
+        <p class="card-sub">Suppose two blocks relate in a particular way. Arrangements that disagree are set aside. Your input data never changes.</p>
+        <form id="constraint-form" class="constraint-form">
+          <div class="pair-pick">
+            <label><span>Block</span><select id="block-a" aria-label="First phase block"></select></label>
+            <span class="pair-link" aria-hidden="true">↔</span>
+            <label><span>and block</span><select id="block-b" aria-label="Second phase block"></select></label>
+          </div>
+          <div class="relationship">
+            <span id="relationship-label" class="field-label">Relative orientation</span>
+            <div class="segmented" role="radiogroup" aria-labelledby="relationship-label">
+              <input type="radio" name="relationship" id="relationship-same" value="0" checked><label for="relationship-same">Same</label>
+              <input type="radio" name="relationship" id="relationship-opposite" value="1"><label for="relationship-opposite">Opposite</label>
+            </div>
+          </div>
+          <button class="btn btn-primary btn-block" id="add-constraint" type="submit">Apply hypothesis</button>
+        </form>
+        <p id="constraint-help" class="help">For two single 0/1 variants, same orientation means both alternate alleles sit on one copy (cis); opposite means they sit on different copies (trans).</p>
+        <div class="active-head"><h3>Active <span id="constraint-count" class="count">0</span></h3><button id="reset-constraints" class="btn-text" type="button">Reset all</button></div>
+        <ul id="active-constraints" class="constraint-list"></ul>
+        <div id="informative-section" class="informative" hidden>
+          <h3>Most informative relationships</h3>
+          <p class="help">Knowing these would separate the most predicted protein outcomes. This is not a probability.</p>
+          <div id="informative-pairs" class="informative-list"></div>
+        </div>
+      </aside>
+
+      <section class="card outcomes" aria-labelledby="outcomes-heading">
+        <header class="card-head">
+          <div>
+            <h2 id="outcomes-heading">Coding outcomes</h2>
+            <p id="result-explanation" class="card-sub" aria-live="polite"></p>
+          </div>
+          <div class="mini-stats"><span><strong id="compatible-count">—</strong> compatible arrangements</span><span><strong id="outcome-count">—</strong> outcomes</span></div>
+        </header>
+        <div id="outcome-options" class="outcome-grid"></div>
+        <button id="show-all-outcomes" class="btn btn-quiet show-all" type="button" hidden></button>
+      </section>
+    </div>
+
+    <section class="card evidence" aria-labelledby="evidence-heading">
+      <header class="card-head">
+        <div>
+          <h2 id="evidence-heading">Coding evidence</h2>
+          <p class="card-sub">What the input says about each coding base, in transcript order. Missing records stay unknown and never count as reference.</p>
+        </div>
+      </header>
+      <div id="evidence-summary" class="evidence-summary"></div>
+      <div id="evidence-map" class="evidence-map"></div>
+      <details class="variant-details">
+        <summary><span id="variant-count">Variants</span><span class="summary-hint">Genotypes, phase sets and call quality</span></summary>
+        <div class="table-scroll"><table><caption class="sr-only">Called coding variants used in the analysis</caption><thead><tr><th>Variant</th><th>Coding change</th><th>Position</th><th>Alleles</th><th>GT</th><th>PS</th><th>Block</th><th class="num">GQ</th><th class="num">DP</th></tr></thead><tbody id="variants-body"></tbody></table></div>
+      </details>
+    </section>
+
+    <section id="report-notes" class="notes" aria-labelledby="notes-heading">
+      <div class="notes-main">
+        <h2 id="notes-heading">Reading this report</h2>
+        <p>Each arrangement is one way the called heterozygous alleles could be distributed between the two gene copies. Predictions cover the <strong>included calls only</strong>. Unknown intervals may hide further variants. A reference-identical CDS does not establish protein function, and no phase probabilities are assigned. PhaseSpace does not perform phasing and does not make a diagnosis.</p>
+        <p id="source-meta" class="source-meta"></p>
+      </div>
+      <div id="warning-panel" class="notice" hidden><h3>Interpretation notes</h3><ul id="warnings"></ul></div>
+    </section>
+
+    <footer class="footer"><span>PhaseSpace <span id="version-label"></span></span><span>Self-contained · private by design · no network requests</span></footer>
   </main>
+  <div id="tooltip" class="tooltip" role="tooltip" hidden></div>
   <noscript><div class="noscript">Enable JavaScript to explore this standalone report. No internet connection is needed.</div></noscript>
   <script id="phasespace-data" type="application/json">PHASESPACE_DATA</script>
   <script>/* PHASESPACE_JS */</script>

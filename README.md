@@ -42,6 +42,8 @@ Use the **exact transcript ID** in the annotation. The reference build and conti
 
 Default call thresholds are GQ ≥ 20 and depth ≥ 5. Multi-base gVCF reference blocks require `MIN_DP` for a positive depth threshold: anchor `DP` alone cannot establish depth throughout a block. Single-base records use `DP` (or `MIN_DP` for a reference block). Missing required quality values, missing genotypes, and failed filters produce unknown evidence. Set thresholds with `--min-gq` and `--min-dp`. Setting minimum depth to zero permits a block with only `DP`, explicitly waiving the block-wide depth check; missing quality/depth fields still remain unknown. Multi-sample files require `--sample`.
 
+Deletions in gVCFs are handled the way HaplotypeCaller and DeepVariant write them. A reference block that continues through the bases removed by a called deletion is not treated as a conflict, and a `*` spanning-deletion allele is accepted when an upstream called deletion covers it. A `*` allele combined with another alternate allele at the same site is rejected, because placing it requires read-level phasing.
+
 ## What the report shows
 
 - All supported phase arrangements consistent with the recorded genotype order and phase sets.
@@ -49,7 +51,12 @@ Default call thresholds are GQ ≥ 20 and depth ≥ 5. Multi-base gVCF reference
 - Joint sequence effects, including premature stops, amino-acid changes, frameshifts, and compensating indels.
 - Reference-call support, called-variant evidence, and unknown intervals across the annotated CDS.
 - Hypothetical block-orientation constraints and informative block-pair comparisons.
+- A verdict on whether any arrangement keeps a reference-identical coding sequence, and whether that depends on phase.
+- Both gene copies side by side, with each copy's alternate alleles, its predicted protein length on a shared scale, and the first stop.
+- Per-block flip controls that move a block's alleles to the other copy.
 - A local JSON export with the analyzed sequences, calls, evidence, and scenarios.
+
+The report stores each copy as its called edits rather than as full sequences, and rebuilds sequences in the browser on demand. A 10 kb CDS at the 12-block cap produces a report of about 1.6 MB. The report follows the system light or dark setting.
 
 Hypothetical constraints do not change the VCF or become observed evidence. Each scenario is a possible consequence of the **included called variants**. Unknown intervals permit additional unobserved variants, so these are not exhaustive possible biological sequences. “Reference-identical CDS” counts exact sequence matches within this model; it does not establish protein function.
 

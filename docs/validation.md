@@ -15,6 +15,15 @@ Validated locally on 2026-10-12 (America/New_York), Linux x86_64, Python 3.12.14
 
 The synthetic demo's entire locus analysis, including indexed input loading, took approximately 0.008 seconds in a warmed local run. Real annotation scans and file access will vary substantially. Large real datasets, diverse callers, and additional organisms have not yet been benchmarked or independently validated.
 
+## Update — 2026-10-13
+
+Checked on Linux x86_64 with Python 3.12, pysam 0.24.1 and Node 26.
+
+- **117 automated tests passed**, including new checks for gVCF deletions (reference blocks through deleted bases, `*` spanning-deletion alleles, low-quality spanning records, and rejection of `*` combined with another alternate allele). Report tests check the compact encoding, confirm in Node that the browser rebuilds the exact analysis from it, and cover the phase verdict, block flipping and coding-change labels.
+- `python scripts/benchmark.py` measured a median engine time of **0.043 s** on this machine, down from 0.144 s before the translation changes on the same machine. The figures in the section above came from a different machine.
+- At the 12-block cap with a 10,002-base CDS (2,048 arrangements), analysis takes about 3 s, down from 9.6 s. The HTML report is **1.6 MB**, down from 44 MB, and loads in about 130 ms in a desktop browser.
+- The redesigned report was inspected at desktop and 375-pixel widths, in light and dark modes, with no document-level horizontal overflow and no console errors.
+
 ## Important scope
 
 These tests establish behavior for the supported computational model. They do not establish biological function or clinical performance. Transcript annotation completeness, genotype quality, the correct reference build and supported genetic code remain necessary inputs. Missing evidence never becomes an inferred reference call.
