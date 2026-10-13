@@ -215,7 +215,12 @@ const cis = {id: 'cis', orientations: {A: 0, B: 0, C: 0}, haplotypes: [ref, alt]
 const trans = {id: 'trans', orientations: {A: 0, B: 1, C: 0}, haplotypes: [alt, alt]};
 assert.equal(core.phaseVerdict([cis], 'X').tone, 'good');
 assert.equal(core.phaseVerdict([trans], 'X').tone, 'none');
-assert.deepEqual(core.phaseVerdict([cis, trans], 'X'), {tone: 'mixed', total: 2, keep: 1, min: 0, max: 1});
+assert.deepEqual(core.phaseVerdict([cis, trans], 'X'), {tone: 'mixed', total: 2, keep: 1, min: 0, max: 1, cdsChanged: true});
+// Synonymous edits change the CDS but keep the reference protein.
+const syn = {consequences: ['synonymous']};
+const both = core.phaseVerdict([{haplotypes: [syn, syn]}, {haplotypes: [ref, syn]}], 'X');
+assert.equal(both.tone, 'good'); assert.equal(both.min, 2); assert.equal(both.cdsChanged, true);
+assert.equal(core.phaseVerdict([{haplotypes: [ref, ref]}], 'X').cdsChanged, false);
 assert.equal(core.phaseVerdict([], 'X').tone, 'empty');
 // Older results without consequence labels compare full sequences.
 assert.equal(core.phaseVerdict([{haplotypes: [{cds: 'X'}, {cds: 'Y'}]}], 'X').tone, 'good');

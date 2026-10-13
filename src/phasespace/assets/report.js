@@ -86,14 +86,26 @@
     return (haplotype.consequences || []).indexOf("reference") >= 0 || (typeof haplotype.cds === "string" && haplotype.cds === reference);
   }
 
-  /** How many compatible arrangements keep at least one reference-identical copy. */
+  const UNCHANGED_PROTEIN = ["reference", "synonymous", "protein_sequence_unchanged"];
+
+  /** A copy whose predicted protein matches the reference (its CDS may differ synonymously). */
+  function keepsReferenceProtein(haplotype, reference) {
+    if (isReferenceCopy(haplotype, reference)) return true;
+    const consequences = haplotype.consequences || [];
+    return consequences.length > 0 && consequences.every(function (key) { return UNCHANGED_PROTEIN.indexOf(key) >= 0; });
+  }
+
+  /** How many compatible arrangements keep at least one copy with the reference protein. */
   function phaseVerdict(scenarios, reference) {
     const counts = scenarios.map(function (scenario) {
-      return scenario.haplotypes.filter(function (haplotype) { return isReferenceCopy(haplotype, reference); }).length;
+      return scenario.haplotypes.filter(function (haplotype) { return keepsReferenceProtein(haplotype, reference); }).length;
     });
     const keep = counts.filter(function (count) { return count > 0; }).length;
     const tone = !counts.length ? "empty" : keep === counts.length ? "good" : keep === 0 ? "none" : "mixed";
-    return { tone: tone, total: counts.length, keep: keep, min: Math.min.apply(null, counts), max: Math.max.apply(null, counts) };
+    const cdsChanged = scenarios.some(function (scenario) {
+      return scenario.haplotypes.some(function (haplotype) { return !isReferenceCopy(haplotype, reference); });
+    });
+    return { tone: tone, total: counts.length, keep: keep, min: Math.min.apply(null, counts), max: Math.max.apply(null, counts), cdsChanged: cdsChanged };
   }
 
   /** The arrangement reached by moving one block's alleles to the other copy. */
@@ -297,18 +309,18 @@
       title = "No arrangement fits the applied hypotheses";
       detail = "Remove or reset a hypothesis to see supported arrangements again.";
     } else if (verdict.tone === "good" && verdict.min === 2) {
-      title = "Both copies match the reference coding sequence";
-      detail = "No included call changes the CDS of either copy.";
+      title = "Both copies keep the reference protein sequence";
+      detail = verdict.cdsChanged ? "The included calls change the coding sequence only synonymously, whatever the phase." : "No included call changes the CDS of either copy.";
     } else if (verdict.tone === "good") {
-      title = "Every arrangement keeps a reference-identical copy";
-      detail = "Whatever the phase, at least one copy carries no change to the coding sequence.";
+      title = "Every arrangement keeps a copy with the reference protein";
+      detail = "Whatever the phase, at least one copy's predicted protein matches the reference.";
     } else if (verdict.tone === "none") {
-      title = "No arrangement keeps a reference-identical copy";
-      detail = "Both copies carry coding changes in " + (verdict.total === 1 ? "the only compatible arrangement." : "all " + number(verdict.total) + " compatible arrangements.");
+      title = "No arrangement keeps a copy with the reference protein";
+      detail = "Both copies carry protein-changing edits in " + (verdict.total === 1 ? "the only compatible arrangement." : "all " + number(verdict.total) + " compatible arrangements.");
     } else {
-      title = "Phase decides whether a reference-identical copy remains";
+      title = "Phase decides whether a copy keeps the reference protein";
       const lost = verdict.total - verdict.keep;
-      detail = number(verdict.keep) + " of " + number(verdict.total) + " arrangements " + (verdict.keep === 1 ? "keeps" : "keep") + " one; " + number(lost) + (lost === 1 ? " leaves" : " leave") + " both copies altered. Resolving the block relationships would tell them apart.";
+      detail = number(verdict.keep) + " of " + number(verdict.total) + " arrangements " + (verdict.keep === 1 ? "keeps" : "keep") + " one; " + number(lost) + (lost === 1 ? " changes" : " change") + " the protein on both copies. Resolving the block relationships would tell them apart.";
     }
     if (verdict.tone !== "empty" && evidence.counts.unknown > 0) detail += " Applies to included calls only: " + plural(evidence.counts.unknown, "coding base") + " lack evidence.";
     text("verdict-title", title);
@@ -532,8 +544,8 @@
         glyph.append(row);
       });
       const flags = element("div", "outcome-flags");
-      const kept = first.haplotypes.filter(function (haplotype) { return isReferenceCopy(haplotype, reference); }).length;
-      flags.append(element("span", kept ? "sev-good" : "sev-critical", kept ? plural(kept, "reference copy", "reference copies") : "No reference copy"));
+      const kept = first.haplotypes.filter(function (haplotype) { return keepsReferenceProtein(haplotype, reference); }).length;
+      flags.append(element("span", kept ? "sev-good" : "sev-critical", kept ? plural(kept, "reference protein") : "No reference protein"));
       const seen = new Set();
       first.haplotypes.forEach(function (haplotype) {
         (haplotype.consequences || []).forEach(function (key) {
