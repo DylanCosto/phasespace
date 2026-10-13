@@ -24,6 +24,19 @@ Checked on Linux x86_64 with Python 3.12, pysam 0.24.1 and Node 26.
 - At the 12-block cap with a 10,002-base CDS (2,048 arrangements), analysis takes about 3 s, down from 9.6 s. The HTML report is **1.6 MB**, down from 44 MB, and loads in about 130 ms in a desktop browser.
 - The redesigned report was inspected at desktop and 375-pixel widths, in light and dark modes, with no document-level horizontal overflow and no console errors.
 
+## Real data — GIAB HG002, GRCh38 chr20 (2026-10-13)
+
+Inputs (all public): DeepVariant 1.10 DeepTrio gVCFs for HG002 (a PacBio chr20 run, and a second run published under `ont-r104-chr20` whose file also holds exome-scale calls elsewhere, so its platform is not asserted), the GIAB NISTv4.2.1 benchmark VCF, GENCODE v46 and Ensembl 112 annotation, and chr20 of the GRCh38 no-alt analysis set.
+
+- **Sweep.** Every chr20 MANE Select transcript (521) was run against four inputs (both gVCFs, the DeepVariant variant-only VCF and GIAB): 2,084 runs. All loaded without error. Four stopped at the 12-block cap with 20–21 heterozygous coding variants, as designed. The callers agreed on the variants in the transcripts inspected closely.
+- **Annotation.** With GTF `stop_codon` features joined, all 521 GENCODE coding sequences end in a stop codon and match the Ensembl GFF3 intervals exactly, whether the transcript is named with or without its version. Before this change, every GENCODE run warned that the terminal stop was missing and could not assess stop loss.
+- **Consequences.** For 522 GIAB variant alleles in MANE coding sequence, each analysed alone, PhaseSpace agreed with `bcftools csq --local-csq` (Ensembl 112) on every consequence class (missense, synonymous, stop gained or lost, frameshift, in-frame insertion or deletion, start lost) except one. That exception is the common DEFB126 frameshift that reads through the stop codon: PhaseSpace reports `frameshift` and `stop_lost`, bcftools reports only `frameshift`.
+- **Phase verdict.** 49 transcripts with both gVCFs had a reference-identical CDS in only some arrangements. In 19 of these, every change was synonymous, so the report verdict now asks whether a copy keeps the reference protein sequence.
+- **gVCF deletions.** DeepVariant 1.10 starts the next reference block after a deletion's REF span, so these files never needed the overlapping-block handling. That handling remains for writers that do overlap, and is covered by synthetic tests.
+- **Speed.** Looking up one transcript in the full 51 MB GENCODE v46 GTF took 4.2 s, down from 59 s, by skipping lines that cannot belong to it before parsing them.
+- **Not yet covered.** None of these public files carries phased genotypes, so phase-set handling is still tested only on synthetic data.
+- **Regression fixture.** `tests/data/hg002_chr20` (424 KB, made by `scripts/make_hg002_fixture.py`) keeps real records for five of these transcripts in true chr20 coordinates. `tests/test_hg002.py` checks each across three inputs and both annotation formats.
+
 ## Important scope
 
 These tests establish behavior for the supported computational model. They do not establish biological function or clinical performance. Transcript annotation completeness, genotype quality, the correct reference build and supported genetic code remain necessary inputs. Missing evidence never becomes an inferred reference call.
