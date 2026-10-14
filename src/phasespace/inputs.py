@@ -7,6 +7,7 @@ User files are opened read-only. The reference FASTA must already be indexed.
 from __future__ import annotations
 
 from collections.abc import Iterable
+from dataclasses import replace
 import gzip
 import math
 from pathlib import Path
@@ -322,9 +323,68 @@ def _merge_evidence(raw: list[Evidence], intervals: tuple[tuple[int, int], ...])
     return result
 
 
+def _apply_phase(variants: list[Variant], phase_path: str | Path, sample: str, contig: str,
+                 region: tuple[int, int], warnings: list[str]) -> list[Variant]:
+    """Take GT order and PS for heterozygous calls from a separate phased VCF.
+
+    Phasing tools write variant-only VCFs; the main input keeps the gVCF's
+    evidence. Calls match by position, REF and called allele sequences, so allele
+    numbering may differ between the files. When a phase file is given it is the
+    only source of phase: a heterozygous call it does not phase becomes
+    unphased, so phase sets from the two files are never mixed.
+    """
+    try:
+        reader = pysam.VariantFile(str(phase_path))
+    except (ValueError, OSError) as exc:
+        raise PhaseSpaceError(f"Cannot open phase file: {exc}") from exc
+    phased: dict[tuple[int, str], tuple[tuple[str, str], object]] = {}
+    with reader:
+        samples = list(reader.header.samples)
+        name = sample if sample in samples else samples[0] if len(samples) == 1 else None
+        if name is None:
+            raise PhaseSpaceError(f"Sample {sample!r} is absent from the phase file, which has {len(samples)} samples.")
+        try:
+            records = reader.fetch(contig, *region)
+        except (ValueError, OSError):
+            records = iter(reader)
+        try:
+            for record in records:
+                if record.contig != contig:
+                    continue
+                call = record.samples[name]
+                gt = call.get("GT")
+                if not call.phased or gt is None or len(gt) != 2 or None in gt or gt[0] == gt[1]:
+                    continue
+                alleles = tuple((record.alleles[index] or "").upper() for index in gt)
+                phased[(record.start, (record.ref or "").upper())] = (alleles, call.get("PS"))
+        except (ValueError, OSError) as exc:
+            raise PhaseSpaceError(f"Cannot interpret phase file records: {exc}") from exc
+    result, applied, unmatched = [], 0, 0
+    for variant in variants:
+        if variant.gt[0] == variant.gt[1]:
+            result.append(variant)
+            continue
+        match = phased.get((variant.pos, variant.ref))
+        if match is None or sorted(match[0]) != sorted(variant.alleles):
+            result.append(replace(variant, phased=False, phase_set=None))
+            unmatched += 1
+            continue
+        order, phase_set = match
+        if order != variant.alleles:
+            # IDs list alleles in genotype order, so rebuild it as a phased input would.
+            identifier = variant.id.rsplit(">", 1)[0] + ">" + ",".join(variant.alleles[::-1])
+            variant = replace(variant, id=identifier, gt=variant.gt[::-1], alleles=variant.alleles[::-1], cds_alleles=variant.cds_alleles[::-1])
+        result.append(replace(variant, phased=True, phase_set=None if phase_set is None else str(phase_set)))
+        applied += 1
+    total = applied + unmatched
+    note = f"Phase taken from {Path(phase_path).name} (sample {name}): {applied} of {total} heterozygous coding call{'s' if total != 1 else ''} phased"
+    warnings.append(note + (f"; {unmatched} not phased there {'is' if unmatched == 1 else 'are'} treated as unphased." if unmatched else "."))
+    return result
+
+
 def load_locus(vcf_path: str | Path, fasta_path: str | Path, annotation_path: str | Path,
                transcript_id: str, sample: str | None = None, min_gq: float = 20,
-               min_dp: int = 5) -> Locus:
+               min_dp: int = 5, phase_from: str | Path | None = None) -> Locus:
     """Load supported calls and explicit evidence for one annotated transcript.
 
     A missing quality field fails the quality threshold even if it is set to zero.
@@ -332,6 +392,7 @@ def load_locus(vcf_path: str | Path, fasta_path: str | Path, annotation_path: st
     anchor DP cannot establish the minimum depth throughout the entire block.
     Phased records preserve their genotype order and PS. Phased calls without PS
     remain marked as such for the analysis layer's documented implicit block.
+    With ``phase_from``, phase for heterozygous calls comes only from that VCF.
     """
     try:
         valid_thresholds = math.isfinite(min_gq) and min_gq >= 0 and math.isfinite(min_dp) and min_dp >= 0 and int(min_dp) == min_dp
@@ -479,8 +540,11 @@ def load_locus(vcf_path: str | Path, fasta_path: str | Path, annotation_path: st
                 if isinstance(exc, PhaseSpaceError):
                     raise
                 raise PhaseSpaceError(f"Cannot interpret variant records: {exc}") from exc
+    if phase_from is not None:
+        variants = _apply_phase(variants, phase_from, sample, contig, (intervals[0][0], intervals[-1][1]), warnings)
     variants.sort(key=lambda variant: variant.cds_start)
     evidence = _merge_evidence(_without_deleted_tails(raw_evidence, deleted_tails), intervals)
     if any(item.status == "unknown" for item in evidence):
         warnings.append("Some CDS bases lack usable genotype evidence. An unchanged predicted copy is reference-identical only with respect to included calls; additional variants may be unobserved.")
-    return Locus(transcript, sample, variants, evidence, list(dict.fromkeys(warnings)), Path(vcf_path).name)
+    source = Path(vcf_path).name + (f" + phase from {Path(phase_from).name}" if phase_from is not None else "")
+    return Locus(transcript, sample, variants, evidence, list(dict.fromkeys(warnings)), source)

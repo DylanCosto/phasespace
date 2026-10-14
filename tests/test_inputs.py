@@ -465,3 +465,61 @@ def test_unversioned_id_matching_several_versions_is_rejected(files):
     with pytest.raises(PhaseSpaceError, match="several annotated versions"):
         load_locus(write([]), reference, annotation, "TX")
     assert load_locus(write([]), reference, annotation, "TX.2").transcript.id == "TX.2"
+
+
+def phase_file(tmp_path, records, samples=("SAMPLE",)):
+    path = tmp_path / "phased.vcf"
+    header = HEADER.replace("\tSAMPLE\n", "\t" + "\t".join(samples) + "\n")
+    path.write_text(header + "".join(f"chr1\t{pos}\t.\t{ref}\t{alt}\t.\tPASS\t.\tGT:PS\t{values}\n" for pos, ref, alt, values in records))
+    return path
+
+
+def test_phase_from_supplies_gt_order_and_phase_set(files, tmp_path):
+    reference, annotation, write = files
+    phased = phase_file(tmp_path, [(16, "A", "T", "1|0:5"), (32, "C", "T", "0|1:5")])
+    locus = load_locus(write([row(16, "A", "T"), row(32, "C", "T")]), reference, annotation, "TX", phase_from=phased)
+    first, second = locus.variants
+    assert (first.gt, first.alleles, first.cds_alleles, first.phased, first.phase_set) == ((1, 0), ("T", "A"), ("T", "A"), True, "5")
+    assert first.id == "chr1:16:A>T,A"
+    assert (second.gt, second.alleles, second.phased, second.phase_set) == ((0, 1), ("C", "T"), True, "5")
+    assert any("2 of 2 heterozygous coding calls phased" in w for w in locus.warnings)
+    assert locus.source == "calls.vcf + phase from phased.vcf"
+    # Opposite orientation within one phase set leaves a single arrangement.
+    from phasespace.analysis import analyze
+    result = analyze(locus)
+    assert result["scenario_count"] == 1
+    assert sorted(len(h["variant_ids"]) for h in result["scenarios"][0]["haplotypes"]) == [1, 1]
+
+
+def test_phase_from_replaces_the_inputs_own_phase(files, tmp_path):
+    reference, annotation, write = files
+    phased = phase_file(tmp_path, [(16, "A", "T", "0|1:5")])
+    calls = [row(16, "A", "T", fmt="GT:GQ:DP:PS", values="1|0:50:12:9"), row(32, "C", "T", fmt="GT:GQ:DP:PS", values="0|1:50:12:9")]
+    first, second = load_locus(write(calls), reference, annotation, "TX", phase_from=phased).variants
+    assert (first.gt, first.phase_set) == ((0, 1), "5")
+    assert (second.phased, second.phase_set) == (False, None)
+
+
+def test_phase_from_matches_alleles_by_sequence_not_index(files, tmp_path):
+    reference, annotation, write = files
+    phased = phase_file(tmp_path, [(16, "A", "G,T", "1|0:5")])
+    variant = load_locus(write([row(16, "A", "T,G", gt="0/2")]), reference, annotation, "TX", phase_from=phased).variants[0]
+    assert (variant.gt, variant.alleles, variant.phased) == ((2, 0), ("G", "A"), True)
+
+
+def test_phase_from_ignores_records_with_different_alleles(files, tmp_path):
+    reference, annotation, write = files
+    phased = phase_file(tmp_path, [(16, "A", "C", "0|1:5")])
+    locus = load_locus(write([row(16, "A", "T")]), reference, annotation, "TX", phase_from=phased)
+    assert not locus.variants[0].phased
+    assert any("0 of 1 heterozygous coding call phased; 1 not phased there is treated as unphased" in w for w in locus.warnings)
+
+
+def test_phase_from_sample_selection(files, tmp_path):
+    reference, annotation, write = files
+    single = phase_file(tmp_path, [(16, "A", "T", "0|1:5")], samples=("RENAMED",))
+    locus = load_locus(write([row(16, "A", "T")]), reference, annotation, "TX", phase_from=single)
+    assert locus.variants[0].phased and any("sample RENAMED" in w for w in locus.warnings)
+    several = phase_file(tmp_path, [(16, "A", "T", "0|1:5\t0|1:5")], samples=("A", "B"))
+    with pytest.raises(PhaseSpaceError, match="absent from the phase file"):
+        load_locus(write([row(16, "A", "T")]), reference, annotation, "TX", phase_from=several)

@@ -10,6 +10,7 @@ README; see docs/validation.md for how they were obtained.
         --gff3 Homo_sapiens.GRCh38.112.chromosome.20.gff3.gz \\
         --vcf pacbio=pacbio-chr20.HG002.g.vcf.gz --vcf deepvariant=dv.HG002.g.vcf.gz \\
         --vcf giab=giab-v4.2.1.HG002.chr20.vcf.gz --vcf trio=trio-phased.HG002.g.vcf.gz \\
+        --vcf whatshap=trio.phased.vcf.gz \\
         --out tests/data/hg002_chr20
 """
 import argparse
@@ -124,6 +125,7 @@ def main():
         "HG004 gVCFs from the same run were merged (`bcftools merge --gvcf`), genotypes with GQ < 20 set missing, "
         "phased with WhatsHap 2.8 `phase --ped` without reads, and copied back by `scripts/transfer_phase.py`. "
         "Sites heterozygous in all three samples stay unphased.\n"
+        "- `whatshap.HG002.vcf.gz`: the WhatsHap output itself (variant-only, all three samples), for `--phase-from`.\n"
         "- `GRCh38.chr20.masked.fa.gz`: chr20 of the GRCh38 no-alt analysis set used by DeepVariant.\n"
         "- `gencode.v46.gtf`: GENCODE v46 comprehensive annotation. `ensembl112.gff3`: Ensembl 112 chr20 GFF3, "
         "contig renamed from `20` to `chr20`.\n"

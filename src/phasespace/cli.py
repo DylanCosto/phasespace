@@ -21,6 +21,7 @@ def _parser() -> argparse.ArgumentParser:
     report.add_argument("--sample", help="Sample name (required for multisample files)")
     report.add_argument("--min-gq", type=float, default=20, help="Minimum genotype quality; missing values fail (default: 20)")
     report.add_argument("--min-dp", type=int, default=5, help="Minimum depth, using MIN_DP for blocks when present (default: 5)")
+    report.add_argument("--phase-from", metavar="PHASED_VCF", help="Phased VCF/BCF (e.g. from WhatsHap or longphase) that supplies GT order and PS for heterozygous calls; the main input still supplies evidence")
     report.add_argument("--max-blocks", type=int, default=8, help="Hard cap on independent heterozygous phase blocks, 1–12 (default: 8)")
     demo = commands.add_parser("demo", help="Generate a report from a synthetic two-variant locus")
     demo.add_argument("--write-inputs", type=Path, help="Keep synthetic FASTA, GTF, VCF and indexed gVCF in this new directory")
@@ -58,11 +59,12 @@ def main(argv: list[str] | None = None) -> int:
                 raise PhaseSpaceError("--max-blocks must be between 1 and 12; enumeration grows exponentially.")
             if not math.isfinite(args.min_gq) or args.min_gq < 0 or args.min_dp < 0:
                 raise PhaseSpaceError("Quality thresholds must be finite and non-negative.")
-            inputs = {Path(args.vcf).resolve(), Path(args.fasta).resolve(), Path(args.annotation).resolve()}
-            inputs.update(Path(str(p) + suffix).resolve() for p in (args.vcf, args.fasta, args.annotation) for suffix in (".fai", ".gzi", ".tbi", ".csi"))
+            sources = [p for p in (args.vcf, args.fasta, args.annotation, args.phase_from) if p is not None]
+            inputs = {Path(p).resolve() for p in sources}
+            inputs.update(Path(str(p) + suffix).resolve() for p in sources for suffix in (".fai", ".gzi", ".tbi", ".csi"))
             if any(path.resolve() in inputs for path in outputs):
                 raise PhaseSpaceError("Output paths must not overwrite input files.")
-            locus = load_locus(args.vcf, args.fasta, args.annotation, args.transcript, sample=args.sample, min_gq=args.min_gq, min_dp=args.min_dp)
+            locus = load_locus(args.vcf, args.fasta, args.annotation, args.transcript, sample=args.sample, min_gq=args.min_gq, min_dp=args.min_dp, phase_from=args.phase_from)
             result = analyze(locus, max_blocks=args.max_blocks)
             result["synthetic"] = False
         result["version"] = __version__

@@ -46,13 +46,15 @@ Deletions in gVCFs are handled whichever way the writer records the deleted base
 
 ### Using phase from WhatsHap, longphase or a trio
 
-Phasing tools write variant-only VCFs. Absent records in such a file are unknown evidence, never reference. To keep the gVCF's reference evidence, copy the phase onto the gVCF first:
+Phasing tools write variant-only VCFs. In such a file, absent records are unknown evidence, never reference. Pass the phased VCF separately so the gVCF still supplies the evidence:
 
 ```bash
-python scripts/transfer_phase.py SAMPLE calls.g.vcf.gz phased.vcf.gz phased.g.vcf.gz
+phasespace report --vcf sample.g.vcf.gz --phase-from phased.vcf.gz \
+  --fasta reference.fa --annotation genes.gtf --transcript ENST00000000000.1 \
+  --sample SAMPLE_ID --out reports/transcript.html
 ```
 
-Records are matched by position, REF and called allele sequences, and only the GT order, the phased flag and PS change. Calls with the same `PS` then share one orientation block.
+Heterozygous calls are matched by position, REF and called allele sequences, so allele numbering may differ between the files (for example in a multi-sample trio VCF). A matched call takes its GT order and `PS` from the phase file. With `--phase-from`, phase comes only from that file: any heterozygous call it does not phase is treated as unphased, so phase sets from the two files are never mixed. The report notes how many calls were phased. If the phase file has one sample with a different name, that sample is used. `scripts/transfer_phase.py` writes the same phase into a gVCF, for use with other tools.
 
 ## What the report shows
 

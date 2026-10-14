@@ -133,3 +133,28 @@ def test_trio_phase_brings_sirpa_under_the_block_cap():
     # One copy carries the 19 phased alternate alleles, including an in-frame deletion.
     for scenario in result["scenarios"]:
         assert "inframe_deletion" in scenario["haplotypes"][1]["consequences"]
+
+
+@pytest.mark.parametrize("transcript", [*EXPECTED, "ENST00000358771.5"])
+def test_phase_from_matches_a_gvcf_with_phase_written_in(transcript):
+    # The WhatsHap trio VCF numbers alleles across all three samples; matching is by sequence.
+    direct = load_locus(DATA / "deepvariant.HG002.vcf.gz", FASTA, DATA / "gencode.v46.gtf", transcript,
+                        phase_from=DATA / "whatshap.HG002.vcf.gz")
+    written = load("trio", GTF, transcript)
+    summary = lambda locus: [(v.id, v.gt, v.cds_alleles, v.phased, v.phase_set) for v in locus.variants]
+    assert summary(direct) == summary(written)
+    assert direct.evidence == written.evidence
+    assert analyze(direct, max_blocks=12)["scenarios"] == analyze(written, max_blocks=12)["scenarios"]
+
+
+def test_cli_phase_from_on_real_data(tmp_path):
+    out, data = tmp_path / "sirpa.html", tmp_path / "sirpa.json"
+    args = ["report", "--vcf", str(DATA / "deepvariant.HG002.vcf.gz"), "--fasta", str(FASTA),
+            "--annotation", str(DATA / "gencode.v46.gtf"), "--transcript", "ENST00000358771.5",
+            "--out", str(out), "--json", str(data), "--max-blocks", "12"]
+    assert main(args) == 2  # Unphased: 20 independent blocks exceed the cap.
+    assert main(args + ["--phase-from", str(DATA / "whatshap.HG002.vcf.gz")]) == 0
+    result = json.loads(data.read_text())
+    assert result["scenario_count"] == 2
+    assert result["source"] == "deepvariant.HG002.vcf.gz + phase from whatshap.HG002.vcf.gz"
+    assert any("19 of 20 heterozygous coding calls phased" in w for w in result["warnings"])
