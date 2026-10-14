@@ -1,0 +1,12 @@
+cff-version: 1.2.0
+message: "If you use PhaseSpace, please cite it as below."
+title: "PhaseSpace: exploring how unresolved phase changes the coding consequences of called variants"
+type: software
+authors:
+  - family-names: Costo
+    given-names: Dylan
+repository-code: "https://github.com/DylanCosto/phasespace"
+license: MIT
+version: 0.2.0
+date-released: "2026-10-14"
+keywords: [phasing, compound heterozygosity, VCF, gVCF, long reads, coding consequence]

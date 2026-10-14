@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "phasespace-vcf"
-version = "0.1.0"
+version = "0.2.0"
 description = "Explore phase uncertainty and joint coding consequences in local VCF/gVCF data"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -12,7 +12,24 @@ dependencies = ["pysam>=0.23,<0.25"]
 authors = [{name = "Dylan Costo"}]
 license = "MIT"
 license-files = ["LICENSE"]
-classifiers = ["Development Status :: 3 - Alpha", "Topic :: Scientific/Engineering :: Bio-Informatics", "Programming Language :: Python :: 3"]
+keywords = ["phasing", "compound heterozygous", "VCF", "gVCF", "haplotype", "coding consequence", "long reads"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Operating System :: POSIX",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
+
+[project.urls]
+Homepage = "https://github.com/DylanCosto/phasespace"
+Documentation = "https://github.com/DylanCosto/phasespace#readme"
+Issues = "https://github.com/DylanCosto/phasespace/issues"
+Changelog = "https://github.com/DylanCosto/phasespace/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "build>=1"]

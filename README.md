@@ -1,23 +1,24 @@
 # PhaseSpace
 
+[![tests](https://github.com/DylanCosto/phasespace/actions/workflows/tests.yml/badge.svg)](https://github.com/DylanCosto/phasespace/actions/workflows/tests.yml) [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 **Explore how uncertain phasing changes the possible coding consequences of your variants.**
 
-PhaseSpace reads a local VCF/gVCF or BCF, a matching indexed reference FASTA, and a GTF/GFF3 transcript annotation. It generates a standalone interactive HTML report for one sample and one transcript. No server, account, cloud upload, or external JavaScript is required to view the report.
+Two heterozygous loss-of-function variants on the same gene copy leave the other copy intact; on different copies they leave none. When the data don't resolve phase, PhaseSpace keeps every arrangement consistent with the calls, rebuilds and translates both copies jointly, and tells you whether a copy keeps the reference protein in every arrangement, in none, or only depending on phase. If reads can settle it, it shows which reads.
 
-Two heterozygous stop variants can occur on the same gene copy or different copies. PhaseSpace retains both arrangements when the data do not resolve that relationship. The viewer lets you explore hypothetical phase constraints, examine the two reconstructed coding sequences, and identify which block relationships distinguish different outcomes.
+It works from local files only: a VCF/gVCF or BCF, an indexed reference FASTA and a GTF/GFF3 annotation, plus optional phased VCF and BAM/CRAM files. Results are self-contained interactive HTML reports that make no network requests, with JSON and TSV for pipelines. Run it on one gene (`report`) or every gene (`scan`).
 
 ## Quick start
 
 Python 3.10+ on Linux or macOS:
 
 ```bash
-git clone https://github.com/DylanCosto/phasespace.git
-cd phasespace
-python -m venv .venv
-source .venv/bin/activate
-python -m pip install -e .
+python -m pip install phasespace-vcf          # after the 0.2.0 release; or install from a clone:
+git clone https://github.com/DylanCosto/phasespace.git && python -m pip install ./phasespace
 phasespace demo --out reports/demo.html --json reports/demo.json
 ```
+
+A Docker image (`ghcr.io/dylancosto/phasespace`) and Nextflow modules are also available; see [Docker and Nextflow](#docker-and-nextflow).
 
 Open `reports/demo.html` in a browser. The demo uses completely synthetic sequences and includes an intentional gap in reference-call evidence. To keep the underlying example inputs:
 
@@ -111,7 +112,7 @@ The report stores each copy as its called edits rather than as full sequences, a
 
 Hypothetical constraints do not change the VCF or become observed evidence. Each scenario is a possible consequence of the **included called variants**. Unknown intervals permit additional unobserved variants, so these are not exhaustive possible biological sequences. “Reference-identical CDS” counts exact sequence matches within this model; it does not establish protein function.
 
-## Scope of version 0.1
+## Scope
 
 This is a research prototype for diploid coding loci, using the standard genetic code. It supports SNVs, substitutions and sequence-resolved small indels contained within a single CDS segment, including multi-allelic diploid genotypes. Calls on the negative strand are projected into transcript orientation before applying edits.
 
@@ -134,6 +135,10 @@ python -m build
 ```
 
 See [the architecture guide](docs/architecture.md) for how the code is organised, [the model notes](docs/model.md) for interpretation, and [the validation record](docs/validation.md) for the checks performed, including on real HG002 data.
+
+## Citing
+
+If you use PhaseSpace, please cite it using [CITATION.cff](CITATION.cff) (GitHub shows a "Cite this repository" button). A JOSS paper is in preparation (`paper/`).
 
 ## Related work
 

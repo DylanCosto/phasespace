@@ -56,6 +56,12 @@ GATK 4.6.2.0 HaplotypeCaller (`-ERC GVCF`) was run on the GIAB Illumina reads ov
 - **Deletions.** Like DeepVariant 1.10, GATK starts the next reference block after a deletion's REF span; at the NCOA3 deletion, the block begins at the first base after `ACAG`. So neither caller writes reference blocks through deleted bases. PhaseSpace's handling of that case remains as a safeguard for other writers, tested synthetically.
 - **Agreement.** For the five transcripts outside SIRPA, GATK's calls match the PacBio DeepVariant calls exactly, with the same protein-level verdicts. GATK's own read-backed phase (`PS`) is used directly: SPINT3 becomes 2 blocks and 2 arrangements. In SIRPA, a paralogous region, the short-read GATK run calls 4 of the 21 variants found with long reads. This reflects short-read mapping, not PhaseSpace.
 
+## Release checks — 0.2.0 (2026-10-14)
+
+- 239 automated tests pass, including Node tests of the report and scan pages.
+- `python -m build` produces an sdist and wheel that pass `twine check`. The wheel was installed into a clean environment (Python 3.11 with pysam only) and ran `scan --reads` on the HG002 fixture from outside the checkout.
+- The Docker image builds and runs. The Nextflow example pipeline ran both test samples in Docker with Nextflow 26.10.
+
 ## Important scope
 
 These tests establish behavior for the supported computational model. They do not establish biological function or clinical performance. Transcript annotation completeness, genotype quality, the correct reference build and supported genetic code remain necessary inputs. Missing evidence never becomes an inferred reference call.
