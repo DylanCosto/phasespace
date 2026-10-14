@@ -12,7 +12,14 @@ inputs.load_locus  ──▶  Locus  ──▶  analysis.analyze  ──▶  res
 
 Frozen dataclasses shared by every stage: `Transcript`, `Variant`, `Evidence`, `Locus`. `PhaseSpaceError` is the one error type for anything outside the supported model. The CLI prints it and exits with status 2.
 
+## `annotation.py` — finding transcripts
+
+`read_transcript(path, id)` finds one transcript (exact, versioned or unversioned, or GFF3 ID). `select_transcript(path, gene)` picks a gene's MANE Select, then Ensembl canonical, then RefSeq Select transcript. `catalogue(path, genes=None)` returns one such transcript per protein-coding gene in two passes: one over transcript features and one over CDS and stop codons. All three build intervals with the same checks.
+
 ## `inputs.py` — reading one locus
+
+`LocusReader(vcf, fasta, sample, …, phase_from)` opens the inputs once and `load(model)` builds each `Locus`. `scan` relies on this.
+
 
 `load_locus(vcf_path, fasta_path, annotation_path, transcript_id, sample=None, min_gq=20, min_dp=5, phase_from=None) -> Locus`
 
@@ -38,6 +45,10 @@ Frozen dataclasses shared by every stage: `Transcript`, `Variant`, `Evidence`, `
 `write_report(result, path)` inlines `report.css` and `report.js` into `report.html` and embeds the result as JSON. Strings are escaped so data can never become markup, and the page makes no network requests (CSP `connect-src 'none'`).
 
 To keep files small, the embedded result drops each copy's `cds` and `protein` (`report_encoding: "edits"`). `report.js` rebuilds them from the reference and the copy's alleles when needed, and the JSON export restores the full schema. The browser-side functions (`filterScenarios`, `expandAnalysis`, `phaseVerdict`, `flipTarget`, `changeLabel`, `placeLabels`, …) are exported for Node, and `tests/test_report.py` tests them directly.
+
+## `scan.py` — whole-annotation scans
+
+`run_scan` takes the catalogue, drops genes on contigs absent from the inputs, and loads and analyses each gene in worker processes. Each worker keeps one `LocusReader` open. `analysis.summarize` gives the protein-level verdict and tier, matching the report's headline; a Node test checks that they agree. Outputs are `scan.tsv`, `scan.json`, `index.html` (from `assets/scan.*`, with the same safety rules as reports) and `reports/`.
 
 ## Tests and fixtures
 

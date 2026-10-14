@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>PhaseSpace scan</title>
+  <style>/* PHASESPACE_CSS */</style>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to results</a>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="brand">
+        <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true"><path class="strand-a" d="M4 10c8 0 8 12 16 12h8"/><path class="strand-b" d="M4 22c8 0 8-12 16-12h8"/><circle class="strand-a-dot" cx="27" cy="22" r="2.6"/><circle class="strand-b-dot" cx="27" cy="10" r="2.6"/></svg>
+        <span class="brand-name">PhaseSpace</span>
+        <span class="brand-divider" aria-hidden="true"></span>
+        <span class="brand-sub">Gene scan</span>
+      </div>
+      <div class="topbar-actions">
+        <span class="privacy-pill" title="This page is one self-contained file. It makes no network requests."><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="7" width="10" height="7" rx="1.5"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"/></svg>Local file · no network</span>
+        <a class="btn btn-quiet" href="scan.tsv" download><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2v8m0 0 3-3m-3 3L5 7M3 12.5h10"/></svg>scan.tsv</a>
+      </div>
+    </div>
+  </header>
+  <main id="main">
+    <section class="scan-hero">
+      <p class="eyebrow"><span id="sample-label">Sample</span></p>
+      <h1>Where phase matters</h1>
+      <p id="scan-meta" class="locus-meta"></p>
+    </section>
+    <dl id="scan-stats" class="stats scan-stats"></dl>
+    <section class="card scan-card" aria-labelledby="results-heading">
+      <header class="card-head">
+        <div>
+          <h2 id="results-heading">Genes</h2>
+          <p class="card-sub">One representative transcript per gene. Ranked by whether phase decides if a copy keeps the reference protein, then by changes on both copies. Open a gene for its full report.</p>
+        </div>
+        <label class="search"><span class="sr-only">Filter genes</span><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="m10.5 10.5 3 3"/></svg><input id="search" type="search" placeholder="Filter by gene or transcript" autocomplete="off"></label>
+      </header>
+      <div id="tier-filters" class="tier-filters" role="group" aria-label="Filter by tier"></div>
+      <div class="table-scroll scan-table-wrap">
+        <table class="scan-table">
+          <caption class="sr-only">Scanned genes</caption>
+          <thead><tr id="scan-head"></tr></thead>
+          <tbody id="scan-body"></tbody>
+        </table>
+      </div>
+      <p id="scan-empty" class="no-edits" hidden>No genes match these filters.</p>
+      <button id="scan-more" class="btn btn-quiet show-all" type="button" hidden></button>
+    </section>
+    <section class="notes">
+      <div class="notes-main">
+        <h2>Reading this scan</h2>
+        <p>Results cover the <strong>included calls only</strong>. Unknown intervals may hide further variants, and a reference protein sequence does not establish function. No phase probabilities, population frequencies or pathogenicity are assessed. “No reference protein” often reflects common homozygous variants. PhaseSpace does not perform phasing and does not make a diagnosis.</p>
+        <p id="source-meta" class="source-meta"></p>
+      </div>
+      <div id="skipped-panel" class="notice" hidden><h3>Genes not scanned</h3><ul id="skipped"></ul></div>
+    </section>
+    <footer class="footer"><span>PhaseSpace <span id="version-label"></span></span><span>Self-contained · private by design · no network requests</span></footer>
+  </main>
+  <script id="phasespace-data" type="application/json">PHASESPACE_DATA</script>
+  <script>/* PHASESPACE_JS */</script>
+</body>
+</html>

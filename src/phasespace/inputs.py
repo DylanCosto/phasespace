@@ -16,6 +16,7 @@ from urllib.parse import unquote
 
 import pysam
 
+from .annotation import TranscriptModel, _read_annotation, read_transcript  # noqa: F401 (re-exported)
 from .models import Evidence, Locus, PhaseSpaceError, Transcript, Variant
 
 
@@ -25,155 +26,6 @@ _COMPLEMENT = str.maketrans("ACGTNacgtn", "TGCANtgcan")
 
 def _reverse_complement(sequence: str) -> str:
     return sequence.translate(_COMPLEMENT)[::-1]
-
-
-def _attributes(value: str) -> dict[str, str]:
-    if "=" in value.split(";", 1)[0]:
-        return {
-            key: unquote(item)
-            for field in value.rstrip(";").split(";")
-            if "=" in field
-            for key, item in [field.strip().split("=", 1)]
-        }
-    result = {}
-    for field in value.rstrip(";").split(";"):
-        match = re.match(r'\s*(\S+)\s+"?([^";]*?)"?\s*$', field)
-        if match:
-            result[match.group(1)] = match.group(2)
-    return result
-
-
-_VERSION = re.compile(r"\.\d+$")
-
-
-def _read_annotation(path: Path, transcript_id: str) -> tuple[str, str, str, tuple[tuple[int, int], ...]]:
-    """Locate one transcript's coding intervals in a GTF or GFF3 file.
-
-    The transcript may be named by its exact ID, by a GFF3 feature ID such as
-    ``transcript:ENST…`` or ``rna-NM_…``, by ``transcript_id`` with or without
-    a separate ``version`` attribute, or without a version when exactly one
-    annotated version exists. GTF ``stop_codon`` features are joined to the CDS
-    because GTF excludes the terminal stop codon from CDS features.
-    """
-    base = _VERSION.sub("", transcript_id)
-    features: dict[str, dict[str, str]] = {}
-    aliases = {transcript_id}
-    unversioned: dict[str, tuple[set[str], dict[str, str]]] = {}
-    rows: list[tuple[list[str], dict[str, str], set[str], int]] = []
-    opener = gzip.open if str(path).endswith(".gz") else open
-    try:
-        with opener(path, "rt") as handle:
-            for line_number, line in enumerate(handle, 1):
-                if line.startswith("##FASTA"):
-                    break
-                if not line.strip() or line.startswith("#"):
-                    continue
-                # Almost every line belongs to another transcript. Skip those
-                # before splitting and parsing attributes; gene lines are kept
-                # to resolve the transcript's gene name.
-                if base not in line and "\tgene\t" not in line and "\tpseudogene\t" not in line:
-                    continue
-                fields = line.rstrip("\n").split("\t")
-                if len(fields) != 9:
-                    raise PhaseSpaceError(f"Annotation line {line_number} must contain nine tab-separated fields.")
-                attrs = _attributes(fields[8])
-                # Keep only metadata needed to resolve a transcript's gene;
-                # exon/CDS feature IDs can otherwise dominate annotation memory.
-                if "ID" in attrs and (fields[2] in ("gene", "pseudogene") or attrs["ID"] == transcript_id):
-                    features[attrs["ID"]] = attrs
-                if fields[2] in ("transcript", "mRNA"):
-                    names = {attrs.get("ID"), attrs.get("transcript_id")}
-                    if attrs.get("transcript_id") and attrs.get("version"):
-                        names.add(f"{attrs['transcript_id']}.{attrs['version']}")
-                    names.discard(None)
-                    if transcript_id in names:
-                        aliases.update(names)
-                        features[transcript_id] = attrs
-                    elif base == transcript_id:
-                        for name in names:
-                            if _VERSION.sub("", name) == transcript_id:
-                                unversioned[name] = (names, attrs)
-                if fields[2] in ("CDS", "stop_codon") or fields[2].lower() == "selenocysteine":
-                    parents = set(attrs.get("transcript_id", attrs.get("Parent", "")).split(","))
-                    if base in "".join(parents):
-                        rows.append((fields, attrs, parents, line_number))
-    except (OSError, UnicodeError) as exc:
-        raise PhaseSpaceError(f"Cannot read annotation {path}: {exc}") from exc
-    if not any(fields[2] == "CDS" and parents & aliases for fields, _, parents, _ in rows):
-        # A versionless request matches a versioned ID only when unambiguous.
-        versions = sorted({name for name in unversioned if not name.startswith(("transcript:", "rna-"))} or unversioned)
-        if len(versions) > 1:
-            raise PhaseSpaceError(f"Transcript {transcript_id!r} matches several annotated versions ({', '.join(versions)}); give the exact versioned ID.")
-        if versions:
-            names, attrs = unversioned[versions[0]]
-            aliases.update(names)
-            features[transcript_id] = attrs
-    selected: list[tuple[str, int, int, str, int, dict[str, str]]] = []
-    stops: list[tuple[str, int, int, str]] = []
-    for fields, attrs, parents, line_number in rows:
-        if not parents & aliases:
-            continue
-        if fields[2].lower() == "selenocysteine":
-            raise PhaseSpaceError(f"Transcript {transcript_id!r} has a Selenocysteine feature; translation exceptions are unsupported under the standard genetic code model.")
-        try:
-            start, end = int(fields[3]) - 1, int(fields[4])
-            phase = int(fields[7]) if fields[2] == "CDS" else 0
-        except ValueError as exc:
-            raise PhaseSpaceError(f"CDS line {line_number} has invalid coordinates or missing numeric phase.") from exc
-        if start < 0 or end <= start or phase not in (0, 1, 2):
-            raise PhaseSpaceError(f"CDS line {line_number} has invalid coordinates or phase.")
-        if fields[6] not in ("+", "-"):
-            raise PhaseSpaceError(f"CDS line {line_number} must specify + or - strand.")
-        if fields[2] == "CDS":
-            selected.append((fields[0], start, end, fields[6], phase, attrs))
-        else:
-            stops.append((fields[0], start, end, fields[6]))
-    if not selected:
-        raise PhaseSpaceError(f"No CDS features found for transcript {transcript_id!r}; use its transcript ID as written in the annotation (versioned or not), or its GFF3 ID.")
-    if len({row[0] for row in selected}) != 1 or len({row[3] for row in selected}) != 1:
-        raise PhaseSpaceError("A transcript must have CDS features on one contig and one strand.")
-    selected.sort(key=lambda row: row[1])
-    if any(left[2] > right[1] for left, right in zip(selected, selected[1:])):
-        raise PhaseSpaceError("Overlapping or duplicate CDS annotation intervals are unsupported.")
-    contig, strand = selected[0][0], selected[0][3]
-    ordered = selected if strand == "+" else list(reversed(selected))
-    total = 0
-    for index, row in enumerate(ordered):
-        expected = (3 - total % 3) % 3
-        if row[4] != expected:
-            reason = "Partial CDS models are unsupported: the first CDS phase must be 0." if index == 0 else f"Inconsistent CDS phase: expected {expected}, found {row[4]} at {row[0]}:{row[1] + 1}."
-            raise PhaseSpaceError(reason)
-        total += row[2] - row[1]
-    if total % 3:
-        raise PhaseSpaceError("The joined CDS length must be divisible by three; partial CDS models are unsupported.")
-    intervals = [[row[1], row[2]] for row in selected]
-    for stop_contig, left, right, stop_strand in sorted(stops, key=lambda stop: stop[1]):
-        if stop_contig != contig or stop_strand != strand:
-            raise PhaseSpaceError("A transcript's stop_codon must be on the same contig and strand as its CDS.")
-        if any(start <= left and right <= end for start, end in intervals):
-            continue  # Already inside the CDS, as in GFF3.
-        adjacent = next((interval for interval in intervals if (interval[1] == left if strand == "+" else interval[0] == right)), None)
-        if adjacent is not None:
-            adjacent[0], adjacent[1] = min(adjacent[0], left), max(adjacent[1], right)
-        else:
-            intervals.append([left, right])  # A stop codon split across exons.
-    intervals.sort()
-    if any(left[1] > right[0] for left, right in zip(intervals, intervals[1:])):
-        raise PhaseSpaceError("The annotated stop_codon overlaps the CDS in an unsupported way.")
-    if sum(end - start for start, end in intervals) % 3:
-        raise PhaseSpaceError("The joined CDS and stop codon length must be divisible by three.")
-    attrs = ordered[0][5]
-    transcript_attrs = features.get(transcript_id, {})
-    for attributes in [transcript_attrs, *(row[5] for row in selected)]:
-        translation_table = attributes.get("transl_table")
-        if translation_table is not None and translation_table != "1":
-            raise PhaseSpaceError(f"Transcript {transcript_id!r} declares unsupported translation table {translation_table!r}; only the standard genetic code (table 1) is supported.")
-        if "transl_except" in attributes:
-            raise PhaseSpaceError(f"Transcript {transcript_id!r} declares transl_except; translation exceptions are unsupported under the standard genetic code model.")
-    gene_id = attrs.get("gene_id") or attrs.get("gene") or transcript_attrs.get("Parent", "").split(",")[0]
-    gene_attrs = features.get(gene_id, {})
-    gene = attrs.get("gene_name") or gene_attrs.get("Name") or gene_id or transcript_id
-    return contig, strand, gene, tuple((start, end) for start, end in intervals)
 
 
 def _clips(start: int, end: int, intervals: tuple[tuple[int, int], ...]) -> Iterable[tuple[int, int]]:
@@ -352,8 +204,36 @@ def _merge_evidence(raw: list[Evidence], intervals: tuple[tuple[int, int], ...])
     return result
 
 
-def _apply_phase(variants: list[Variant], phase_path: str | Path, sample: str, contig: str,
-                 region: tuple[int, int], warnings: list[str]) -> list[Variant]:
+def _phased_calls(reader: pysam.VariantFile, path: Path, sample: str, contig: str,
+                  region: tuple[int, int]) -> dict[tuple[int, str], tuple[tuple[str, str], object]]:
+    """Phased heterozygous genotypes in a region, keyed by (start, REF)."""
+    if reader.header.contigs:
+        resolved = _resolve_contig(contig, reader.header.contigs)
+        if resolved is None:
+            raise PhaseSpaceError(f"Contig {contig!r} is absent from the phase file header.")
+        contig = resolved
+    try:
+        records = reader.fetch(contig, *region)
+    except (ValueError, OSError):
+        records = iter(_open_variants(path, "phase file"))  # Unindexed: stream the whole file.
+    phased: dict[tuple[int, str], tuple[tuple[str, str], object]] = {}
+    try:
+        for record in records:
+            if record.contig != contig or not (record.start < region[1] and record.stop > region[0]):
+                continue
+            call = record.samples[sample]
+            gt = call.get("GT")
+            if not call.phased or gt is None or len(gt) != 2 or None in gt or gt[0] == gt[1]:
+                continue
+            alleles = tuple((record.alleles[index] or "").upper() for index in gt)
+            phased[(record.start, (record.ref or "").upper())] = (alleles, call.get("PS"))
+    except (ValueError, OSError) as exc:
+        raise PhaseSpaceError(f"Cannot interpret phase file records: {exc}") from exc
+    return phased
+
+
+def _apply_phase(variants: list[Variant], phased: dict[tuple[int, str], tuple[tuple[str, str], object]],
+                 label: str, warnings: list[str]) -> list[Variant]:
     """Take GT order and PS for heterozygous calls from a separate phased VCF.
 
     Phasing tools write variant-only VCFs; the main input keeps the gVCF's
@@ -362,37 +242,6 @@ def _apply_phase(variants: list[Variant], phase_path: str | Path, sample: str, c
     only source of phase: a heterozygous call it does not phase becomes
     unphased, so phase sets from the two files are never mixed.
     """
-    try:
-        reader = pysam.VariantFile(str(phase_path))
-    except (ValueError, OSError) as exc:
-        raise PhaseSpaceError(f"Cannot open phase file: {exc}") from exc
-    phased: dict[tuple[int, str], tuple[tuple[str, str], object]] = {}
-    with reader:
-        samples = list(reader.header.samples)
-        name = sample if sample in samples else samples[0] if len(samples) == 1 else None
-        if name is None:
-            raise PhaseSpaceError(f"Sample {sample!r} is absent from the phase file, which has {len(samples)} samples.")
-        if reader.header.contigs:
-            resolved = _resolve_contig(contig, reader.header.contigs)
-            if resolved is None:
-                raise PhaseSpaceError(f"Contig {contig!r} is absent from the phase file header.")
-            contig = resolved
-        try:
-            records = reader.fetch(contig, *region)
-        except (ValueError, OSError):
-            records = iter(reader)
-        try:
-            for record in records:
-                if record.contig != contig:
-                    continue
-                call = record.samples[name]
-                gt = call.get("GT")
-                if not call.phased or gt is None or len(gt) != 2 or None in gt or gt[0] == gt[1]:
-                    continue
-                alleles = tuple((record.alleles[index] or "").upper() for index in gt)
-                phased[(record.start, (record.ref or "").upper())] = (alleles, call.get("PS"))
-        except (ValueError, OSError) as exc:
-            raise PhaseSpaceError(f"Cannot interpret phase file records: {exc}") from exc
     result, applied, unmatched = [], 0, 0
     for variant in variants:
         if variant.gt[0] == variant.gt[1]:
@@ -409,15 +258,20 @@ def _apply_phase(variants: list[Variant], phase_path: str | Path, sample: str, c
         result.append(replace(variant, phased=True, phase_set=None if phase_set is None else str(phase_set)))
         applied += 1
     total = applied + unmatched
-    note = f"Phase taken from {Path(phase_path).name} (sample {name}): {applied} of {total} heterozygous coding call{'s' if total != 1 else ''} phased"
+    note = f"Phase taken from {label}: {applied} of {total} heterozygous coding call{'s' if total != 1 else ''} phased"
     warnings.append(note + (f"; {unmatched} not phased there {'is' if unmatched == 1 else 'are'} treated as unphased." if unmatched else "."))
     return result
 
 
-def load_locus(vcf_path: str | Path, fasta_path: str | Path, annotation_path: str | Path,
-               transcript_id: str, sample: str | None = None, min_gq: float = 20,
-               min_dp: int = 5, phase_from: str | Path | None = None) -> Locus:
-    """Load supported calls and explicit evidence for one annotated transcript.
+def _open_variants(path: str | Path, what: str) -> pysam.VariantFile:
+    try:
+        return pysam.VariantFile(str(path))
+    except (ValueError, OSError) as exc:
+        raise PhaseSpaceError(f"Cannot open {what}: {exc}") from exc
+
+
+class LocusReader:
+    """Open the reference, calls and optional phase file once; load many transcripts.
 
     A missing quality field fails the quality threshold even if it is set to zero.
     Multi-base reference blocks require MIN_DP when min_dp is positive, since
@@ -428,20 +282,68 @@ def load_locus(vcf_path: str | Path, fasta_path: str | Path, annotation_path: st
     Contig names may differ between inputs by a ``chr`` prefix (and chrM/MT);
     reported positions use the VCF's name.
     """
-    check_thresholds(min_gq, min_dp)
-    contig, strand, gene, intervals = _read_annotation(Path(annotation_path), transcript_id)
-    warnings: list[str] = []
-    variants: list[Variant] = []
-    raw_evidence: list[Evidence] = []
-    called_spans: list[tuple[int, int]] = []
-    deleted_tails: list[tuple[int, int]] = []
-    if not Path(str(fasta_path) + ".fai").is_file():
-        raise PhaseSpaceError("Reference FASTA requires an existing .fai index; index it with samtools faidx before running PhaseSpace.")
-    try:
-        fasta = pysam.FastaFile(str(fasta_path))
-    except (ValueError, OSError) as exc:
-        raise PhaseSpaceError(f"Cannot open indexed reference FASTA: {exc}") from exc
-    with fasta:
+
+    def __init__(self, vcf_path: str | Path, fasta_path: str | Path, sample: str | None = None,
+                 min_gq: float = 20, min_dp: int = 5, phase_from: str | Path | None = None):
+        check_thresholds(min_gq, min_dp)
+        self.vcf_path, self.min_gq, self.min_dp = Path(vcf_path), min_gq, min_dp
+        if not Path(str(fasta_path) + ".fai").is_file():
+            raise PhaseSpaceError("Reference FASTA requires an existing .fai index; index it with samtools faidx before running PhaseSpace.")
+        try:
+            self.fasta = pysam.FastaFile(str(fasta_path))
+        except (ValueError, OSError) as exc:
+            raise PhaseSpaceError(f"Cannot open indexed reference FASTA: {exc}") from exc
+        self.vcf = _open_variants(vcf_path, "VCF/gVCF/BCF")
+        samples = list(self.vcf.header.samples)
+        if sample is None:
+            if len(samples) != 1:
+                self.close()
+                raise PhaseSpaceError("Choose a sample explicitly when the input does not contain exactly one sample.")
+            sample = samples[0]
+        if sample not in samples:
+            self.close()
+            raise PhaseSpaceError(f"Sample {sample!r} is absent from the input.")
+        self.sample = sample
+        self.phase = self.phase_sample = None
+        self.source = self.vcf_path.name
+        if phase_from is not None:
+            self.phase_path = Path(phase_from)
+            self.phase = _open_variants(phase_from, "phase file")
+            phase_samples = list(self.phase.header.samples)
+            self.phase_sample = sample if sample in phase_samples else phase_samples[0] if len(phase_samples) == 1 else None
+            if self.phase_sample is None:
+                self.close()
+                raise PhaseSpaceError(f"Sample {sample!r} is absent from the phase file, which has {len(phase_samples)} samples.")
+            self.phase_label = f"{Path(phase_from).name} (sample {self.phase_sample})"
+            self.source += f" + phase from {Path(phase_from).name}"
+
+    def close(self) -> None:
+        for handle in (getattr(self, "fasta", None), getattr(self, "vcf", None), getattr(self, "phase", None)):
+            if handle is not None:
+                handle.close()
+
+    def __enter__(self) -> "LocusReader":
+        return self
+
+    def __exit__(self, *_exc) -> None:
+        self.close()
+
+    def _records(self, contig: str, start: int, end: int, warnings: list[str]):
+        try:
+            return self.vcf.fetch(contig, start, end)
+        except (ValueError, OSError):
+            warnings.append("Input has no usable regional index; streamed records. BGZF VCF with a tabix/CSI index or indexed BCF enables regional loading.")
+            return iter(_open_variants(self.vcf_path, "VCF/gVCF/BCF"))
+
+    def load(self, model: TranscriptModel) -> Locus:
+        """Load supported calls and explicit evidence for one annotated transcript."""
+        min_gq, min_dp, sample, fasta, reader = self.min_gq, self.min_dp, self.sample, self.fasta, self.vcf
+        contig, strand, gene, intervals = model.contig, model.strand, model.gene, model.intervals
+        warnings: list[str] = []
+        variants: list[Variant] = []
+        raw_evidence: list[Evidence] = []
+        called_spans: list[tuple[int, int]] = []
+        deleted_tails: list[tuple[int, int]] = []
         fasta_contig = _resolve_contig(contig, fasta.references)
         if fasta_contig is None:
             raise PhaseSpaceError(f"Annotation contig {contig!r} is absent from the reference FASTA (also tried {', '.join(repr(a) for a in _contig_aliases(contig)[1:])}).")
@@ -455,133 +357,129 @@ def load_locus(vcf_path: str | Path, fasta_path: str | Path, annotation_path: st
             reference_cds = _reverse_complement(reference_cds)
         if "N" in reference_cds:
             warnings.append("Reference CDS contains N bases; affected codons have uncertain sequence consequences.")
-        transcript = Transcript(transcript_id, gene, contig, strand, intervals, reference_cds)
+        vcf_contig = fasta_contig
+        if reader.header.contigs:
+            vcf_contig = _resolve_contig(contig, reader.header.contigs)
+            if vcf_contig is None:
+                raise PhaseSpaceError(f"Annotation contig {contig!r} is absent from the VCF header (also tried {', '.join(repr(a) for a in _contig_aliases(contig)[1:])}).")
+            declared_length = reader.header.contigs[vcf_contig].length
+            if declared_length is not None and declared_length != contig_length:
+                raise PhaseSpaceError(f"Contig length mismatch for {vcf_contig!r}: VCF declares {declared_length}, reference FASTA has {contig_length}.")
+        if len({contig, fasta_contig, vcf_contig}) > 1:
+            warnings.append(f"Contig names differ between inputs (annotation {contig!r}, reference {fasta_contig!r}, VCF {vcf_contig!r}); they were matched by their chr prefix.")
+        transcript = Transcript(model.id, gene, vcf_contig, strand, intervals, reference_cds)
+        records = self._records(vcf_contig, intervals[0][0], intervals[-1][1], warnings)
         try:
-            reader = pysam.VariantFile(str(vcf_path))
-        except (ValueError, OSError) as exc:
-            raise PhaseSpaceError(f"Cannot open VCF/gVCF/BCF: {exc}") from exc
-        with reader:
-            vcf_contig = fasta_contig
-            if reader.header.contigs:
-                vcf_contig = _resolve_contig(contig, reader.header.contigs)
-                if vcf_contig is None:
-                    raise PhaseSpaceError(f"Annotation contig {contig!r} is absent from the VCF header (also tried {', '.join(repr(a) for a in _contig_aliases(contig)[1:])}).")
-                declared_length = reader.header.contigs[vcf_contig].length
-                if declared_length is not None and declared_length != contig_length:
-                    raise PhaseSpaceError(f"Contig length mismatch for {vcf_contig!r}: VCF declares {declared_length}, reference FASTA has {contig_length}.")
-            if len({contig, fasta_contig, vcf_contig}) > 1:
-                warnings.append(f"Contig names differ between inputs (annotation {contig!r}, reference {fasta_contig!r}, VCF {vcf_contig!r}); they were matched by their chr prefix.")
-            transcript = replace(transcript, contig=vcf_contig)
-            samples = list(reader.header.samples)
-            if sample is None:
-                if len(samples) != 1:
-                    raise PhaseSpaceError("Choose a sample explicitly when the input does not contain exactly one sample.")
-                sample = samples[0]
-            if sample not in samples:
-                raise PhaseSpaceError(f"Sample {sample!r} is absent from the input.")
-            try:
-                records = reader.fetch(vcf_contig, intervals[0][0], intervals[-1][1])
-            except (ValueError, OSError):
-                records = iter(reader)
-                warnings.append("Input has no usable regional index; streamed records. BGZF VCF with a tabix/CSI index or indexed BCF enables regional loading.")
-            try:
-                for record in records:
-                    if record.contig != vcf_contig:
+            for record in records:
+                if record.contig != vcf_contig:
+                    continue
+                start = record.start
+                ref = (record.ref or "").upper()
+                ref_end = start + len(ref)
+                span_end = max(ref_end, record.stop)
+                clips = list(_clips(start, span_end, intervals))
+                if not clips:
+                    continue
+                location = f"{vcf_contig}:{start + 1}"
+                if not _BASES.fullmatch(ref) or start < 0 or ref_end > contig_length:
+                    raise PhaseSpaceError(f"Invalid REF allele or reference bounds at {location}.")
+                observed_ref = fasta.fetch(fasta_contig, start, ref_end).upper()
+                if ref != observed_ref:
+                    raise PhaseSpaceError(f"REF mismatch at {location}: VCF has {ref}, reference FASTA has {observed_ref}. Check genome build and reference.")
+                call = record.samples[sample]
+                gt = call.get("GT")
+                called = [] if gt is None else [value for value in gt if value is not None]
+                if called and len(gt) != 2:
+                    raise PhaseSpaceError(f"Non-diploid genotype at {location}; only diploid loci are supported.")
+                if any(value < 0 or value >= len(record.alleles or ()) for value in called):
+                    raise PhaseSpaceError(f"Genotype references an absent allele at {location}.")
+                has_alt = any(value > 0 for value in called)
+                if has_alt:
+                    called_sequences = [(record.alleles[value] or "").upper() for value in called]
+                    if "*" in called_sequences:
+                        # A spanning-deletion allele restates a deletion already
+                        # called upstream. It adds no edit of its own.
+                        if set(called_sequences) - {"*", ref}:
+                            raise PhaseSpaceError(f"Unsupported called allele at {location}; a spanning deletion combined with another alternate allele cannot be resolved without read-level phasing.")
+                        if not any(left <= start and ref_end <= right for left, right in deleted_tails):
+                            raise PhaseSpaceError(f"Unsupported called allele at {location}; this spanning-deletion allele is not covered by a called upstream deletion.")
+                        clips = list(_clips(start, ref_end, intervals))
+                        reasons, _, _ = _quality(record, call, min_gq, min_dp, False)
+                        if reasons:
+                            detail = f"{location}: " + ", ".join(reasons)
+                            warnings.append("Excluded call; " + detail + ".")
+                            raw_evidence.extend(Evidence(left, right, "unknown", detail) for left, right in clips)
+                        else:
+                            raw_evidence.extend(Evidence(left, right, "variant", "Spanning deletion from an upstream call.") for left, right in clips)
                         continue
-                    start = record.start
-                    ref = (record.ref or "").upper()
-                    ref_end = start + len(ref)
-                    span_end = max(ref_end, record.stop)
-                    clips = list(_clips(start, span_end, intervals))
+                    if any(not _BASES.fullmatch(allele) for allele in called_sequences):
+                        raise PhaseSpaceError(f"Unsupported called allele at {location}; symbolic, spanning-deletion and breakend alleles cannot be translated.")
+                    # END on a sequence variant does not extend its replacement span.
+                    clips = list(_clips(start, ref_end, intervals))
                     if not clips:
                         continue
-                    location = f"{vcf_contig}:{start + 1}"
-                    if not _BASES.fullmatch(ref) or start < 0 or ref_end > contig_length:
-                        raise PhaseSpaceError(f"Invalid REF allele or reference bounds at {location}.")
-                    observed_ref = fasta.fetch(fasta_contig, start, ref_end).upper()
-                    if ref != observed_ref:
-                        raise PhaseSpaceError(f"REF mismatch at {location}: VCF has {ref}, reference FASTA has {observed_ref}. Check genome build and reference.")
-                    call = record.samples[sample]
-                    gt = call.get("GT")
-                    called = [] if gt is None else [value for value in gt if value is not None]
-                    if called and len(gt) != 2:
-                        raise PhaseSpaceError(f"Non-diploid genotype at {location}; only diploid loci are supported.")
-                    if any(value < 0 or value >= len(record.alleles or ()) for value in called):
-                        raise PhaseSpaceError(f"Genotype references an absent allele at {location}.")
-                    has_alt = any(value > 0 for value in called)
-                    if has_alt:
-                        called_sequences = [(record.alleles[value] or "").upper() for value in called]
-                        if "*" in called_sequences:
-                            # A spanning-deletion allele restates a deletion already
-                            # called upstream. It adds no edit of its own.
-                            if set(called_sequences) - {"*", ref}:
-                                raise PhaseSpaceError(f"Unsupported called allele at {location}; a spanning deletion combined with another alternate allele cannot be resolved without read-level phasing.")
-                            if not any(left <= start and ref_end <= right for left, right in deleted_tails):
-                                raise PhaseSpaceError(f"Unsupported called allele at {location}; this spanning-deletion allele is not covered by a called upstream deletion.")
-                            clips = list(_clips(start, ref_end, intervals))
-                            reasons, _, _ = _quality(record, call, min_gq, min_dp, False)
-                            if reasons:
-                                detail = f"{location}: " + ", ".join(reasons)
-                                warnings.append("Excluded call; " + detail + ".")
-                                raw_evidence.extend(Evidence(left, right, "unknown", detail) for left, right in clips)
-                            else:
-                                raw_evidence.extend(Evidence(left, right, "variant", "Spanning deletion from an upstream call.") for left, right in clips)
-                            continue
-                        if any(not _BASES.fullmatch(allele) for allele in called_sequences):
-                            raise PhaseSpaceError(f"Unsupported called allele at {location}; symbolic, spanning-deletion and breakend alleles cannot be translated.")
-                        # END on a sequence variant does not extend its replacement span.
-                        clips = list(_clips(start, ref_end, intervals))
-                        if not clips:
-                            continue
-                        if any(start < end and ref_end > left for left, end in called_spans):
-                            raise PhaseSpaceError(f"Overlapping called coding variants at {location} are unsupported; normalize and resolve the records first.")
-                        called_spans.append((start, ref_end))
-                        tail = _deleted_tail(start, ref, called_sequences)
-                        if tail is not None:
-                            deleted_tails.append(tail)
-                        # Check unsupported boundary edits even when quality later fails.
-                        known_alleles = tuple(called_sequences + [ref] * (2 - len(called_sequences)))
-                        _project(start, ref_end, ref, known_alleles, transcript)
-                    block_alts = record.alts or ()
-                    block = not has_alt and all(alt in ("<NON_REF>", "<*>", ".") for alt in block_alts)
-                    if not has_alt and not block:
-                        # A 0/0 structural-variant record does not establish that
-                        # every base in its END span is reference at other sites.
-                        clips = list(_clips(start, ref_end, intervals))
-                        if not clips:
-                            continue
-                    reasons, gq, dp = _quality(record, call, min_gq, min_dp, block, reference_call=not has_alt)
-                    if gt is None or len(gt) != 2 or any(value is None for value in gt):
-                        reasons.insert(0, "missing or partial genotype")
-                    if reasons:
-                        detail = f"{location}: " + ", ".join(reasons)
-                        warnings.append("Excluded call; " + detail + ".")
-                        raw_evidence.extend(Evidence(left, right, "unknown", detail) for left, right in clips)
+                    if any(start < end and ref_end > left for left, end in called_spans):
+                        raise PhaseSpaceError(f"Overlapping called coding variants at {location} are unsupported; normalize and resolve the records first.")
+                    called_spans.append((start, ref_end))
+                    tail = _deleted_tail(start, ref, called_sequences)
+                    if tail is not None:
+                        deleted_tails.append(tail)
+                    # Check unsupported boundary edits even when quality later fails.
+                    known_alleles = tuple(called_sequences + [ref] * (2 - len(called_sequences)))
+                    _project(start, ref_end, ref, known_alleles, transcript)
+                block_alts = record.alts or ()
+                block = not has_alt and all(alt in ("<NON_REF>", "<*>", ".") for alt in block_alts)
+                if not has_alt and not block:
+                    # A 0/0 structural-variant record does not establish that
+                    # every base in its END span is reference at other sites.
+                    clips = list(_clips(start, ref_end, intervals))
+                    if not clips:
                         continue
-                    if not has_alt:
-                        detail = "Homozygous-reference genotype (DeepVariant RefCall)." if "RefCall" in record.filter.keys() else "Passing homozygous-reference genotype."
-                        raw_evidence.extend(Evidence(left, right, "reference", detail) for left, right in clips)
-                        continue
-                    alleles = tuple(record.alleles[value].upper() for value in gt)
-                    cds_start, cds_end, cds_ref, cds_alleles = _project(start, ref_end, ref, alleles, transcript)
-                    if reference_cds[cds_start:cds_end] != cds_ref:
-                        raise PhaseSpaceError(f"Internal CDS projection mismatch at {location}.")
-                    ps = call.get("PS")
-                    phase_set = str(ps) if call.phased and ps is not None else None
-                    # Name the call by its alternate alleles, independent of genotype order.
-                    variant_id = f"{location}:{ref}>{','.join(sorted(set(alleles) - {ref}))}"
-                    variants.append(Variant(variant_id, start, ref, alleles, tuple(gt), call.phased, phase_set,
-                                            cds_start, cds_end, cds_ref, cds_alleles, gq, dp))
-                    raw_evidence.extend(Evidence(left, right, "variant", "Passing variant genotype.") for left, right in clips)
-            except (ValueError, OSError) as exc:
-                if isinstance(exc, PhaseSpaceError):
-                    raise
-                raise PhaseSpaceError(f"Cannot interpret variant records: {exc}") from exc
-    if phase_from is not None:
-        variants = _apply_phase(variants, phase_from, sample, transcript.contig, (intervals[0][0], intervals[-1][1]), warnings)
-    variants.sort(key=lambda variant: variant.cds_start)
-    evidence = _merge_evidence(_without_deleted_tails(raw_evidence, deleted_tails), intervals)
-    if any(item.status == "unknown" for item in evidence):
-        warnings.append("Some CDS bases lack usable genotype evidence. An unchanged predicted copy is reference-identical only with respect to included calls; additional variants may be unobserved.")
-    source = Path(vcf_path).name + (f" + phase from {Path(phase_from).name}" if phase_from is not None else "")
-    return Locus(transcript, sample, variants, evidence, list(dict.fromkeys(warnings)), source)
+                reasons, gq, dp = _quality(record, call, min_gq, min_dp, block, reference_call=not has_alt)
+                if gt is None or len(gt) != 2 or any(value is None for value in gt):
+                    reasons.insert(0, "missing or partial genotype")
+                if reasons:
+                    detail = f"{location}: " + ", ".join(reasons)
+                    warnings.append("Excluded call; " + detail + ".")
+                    raw_evidence.extend(Evidence(left, right, "unknown", detail) for left, right in clips)
+                    continue
+                if not has_alt:
+                    detail = "Homozygous-reference genotype (DeepVariant RefCall)." if "RefCall" in record.filter.keys() else "Passing homozygous-reference genotype."
+                    raw_evidence.extend(Evidence(left, right, "reference", detail) for left, right in clips)
+                    continue
+                alleles = tuple(record.alleles[value].upper() for value in gt)
+                cds_start, cds_end, cds_ref, cds_alleles = _project(start, ref_end, ref, alleles, transcript)
+                if reference_cds[cds_start:cds_end] != cds_ref:
+                    raise PhaseSpaceError(f"Internal CDS projection mismatch at {location}.")
+                ps = call.get("PS")
+                phase_set = str(ps) if call.phased and ps is not None else None
+                # Name the call by its alternate alleles, independent of genotype order.
+                variant_id = f"{location}:{ref}>{','.join(sorted(set(alleles) - {ref}))}"
+                variants.append(Variant(variant_id, start, ref, alleles, tuple(gt), call.phased, phase_set,
+                                        cds_start, cds_end, cds_ref, cds_alleles, gq, dp))
+                raw_evidence.extend(Evidence(left, right, "variant", "Passing variant genotype.") for left, right in clips)
+        except (ValueError, OSError) as exc:
+            if isinstance(exc, PhaseSpaceError):
+                raise
+            raise PhaseSpaceError(f"Cannot interpret variant records: {exc}") from exc
+        if self.phase is not None:
+            phased = _phased_calls(self.phase, self.phase_path, self.phase_sample, vcf_contig, (intervals[0][0], intervals[-1][1]))
+            variants = _apply_phase(variants, phased, self.phase_label, warnings)
+        variants.sort(key=lambda variant: variant.cds_start)
+        evidence = _merge_evidence(_without_deleted_tails(raw_evidence, deleted_tails), intervals)
+        if any(item.status == "unknown" for item in evidence):
+            warnings.append("Some CDS bases lack usable genotype evidence. An unchanged predicted copy is reference-identical only with respect to included calls; additional variants may be unobserved.")
+        return Locus(transcript, sample, variants, evidence, list(dict.fromkeys(warnings)), self.source)
+
+
+def load_locus(vcf_path: str | Path, fasta_path: str | Path, annotation_path: str | Path,
+               transcript_id: str, sample: str | None = None, min_gq: float = 20,
+               min_dp: int = 5, phase_from: str | Path | None = None) -> Locus:
+    """Load supported calls and explicit evidence for one annotated transcript.
+
+    See ``LocusReader`` for how calls, evidence, phase and contig names are handled.
+    """
+    check_thresholds(min_gq, min_dp)
+    model = read_transcript(Path(annotation_path), transcript_id)
+    with LocusReader(vcf_path, fasta_path, sample, min_gq, min_dp, phase_from) as reader:
+        return reader.load(model)

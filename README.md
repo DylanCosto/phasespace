@@ -44,6 +44,26 @@ Default call thresholds are GQ ≥ 20 and depth ≥ 5. Multi-base gVCF reference
 
 Deletions in gVCFs are handled whichever way the writer records the deleted bases. A reference block that continues through the bases removed by a called deletion is not treated as a conflict, and a `*` spanning-deletion allele is accepted when an upstream called deletion covers it. A `*` allele combined with another alternate allele at the same site is rejected, because placing it requires read-level phasing.
 
+### Pick a transcript by gene
+
+Use `--gene SYMBOL` (or a gene ID) instead of `--transcript`. PhaseSpace picks the gene's MANE Select transcript, then its Ensembl canonical transcript, then its RefSeq Select transcript, and says which it chose. If none is tagged, it lists the transcripts so you can pick one with `--transcript`.
+
+### Scan every gene
+
+```bash
+phasespace scan --vcf sample.g.vcf.gz --fasta reference.fa --annotation genes.gtf.gz \
+  --sample SAMPLE_ID --out-dir scan/
+```
+
+This analyses one representative transcript per protein-coding gene and ranks the genes:
+
+1. **Phase decides** whether a copy keeps the reference protein.
+2. **No reference protein, disruptive:** no arrangement keeps a copy with the reference protein, and a frameshift, premature stop, or start or stop loss is involved.
+3. **No reference protein** (often common homozygous missense variants).
+4. **Reference protein kept.**
+
+The scan writes `scan/index.html` (sortable and filterable), `scan.tsv`, `scan.json`, and reports for tiers 1–2 (`--reports all` writes one for every gene with variants). Restrict it to a panel with `--genes CFTR,PAH` or `--genes @panel.txt`. `--phase-from`, thresholds and `--max-blocks` work as for `report`. Genes on contigs absent from the reference or VCF are counted but not listed, so single-chromosome and exome inputs work. A whole-genome GENCODE scan of HG002 chr20 calls takes under 20 seconds on 12 processes.
+
 ### Using phase from WhatsHap, longphase or a trio
 
 Phasing tools write variant-only VCFs. In such a file, absent records are unknown evidence, never reference. Pass the phased VCF separately so the gVCF still supplies the evidence:

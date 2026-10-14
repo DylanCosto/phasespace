@@ -369,7 +369,7 @@ def analyze(locus: Locus, max_blocks: int = 8) -> dict:
             "and an unknown codon could contain an earlier stop."
         )
     ref_protein, ref_first_stop, _ = reference_translation
-    return {
+    result = {
         "schema_version": 1,
         "sample": locus.sample,
         "transcript": asdict(locus.transcript),
@@ -386,4 +386,33 @@ def analyze(locus: Locus, max_blocks: int = 8) -> dict:
         "reference_first_stop": ref_first_stop,
         "reference_protein_length": len(ref_protein),
         "informative_pairs": _informative_pairs(blocks, scenarios),
+    }
+    result["summary"] = summarize(result)
+    return result
+
+
+_UNCHANGED_PROTEIN = {"reference", "synonymous", "protein_sequence_unchanged"}
+DISRUPTIVE = ("frameshift", "stop_gained", "start_lost", "stop_lost")
+
+
+def summarize(result: dict) -> dict:
+    """Protein-level verdict for an analysis, matching the report's headline.
+
+    verdict: "good" when every arrangement keeps a copy with the reference
+    protein, "none" when no arrangement does, "mixed" when phase decides.
+    tier ranks genes for a scan: 1 phase decides; 2 no reference-protein copy
+    and a disruptive change; 3 no reference-protein copy otherwise; 4 the rest.
+    """
+    scenarios = result.get("scenarios", [])
+    keeps = [any(set(h["consequences"]) <= _UNCHANGED_PROTEIN for h in s["haplotypes"]) for s in scenarios]
+    verdict = "empty" if not keeps else "good" if all(keeps) else "none" if not any(keeps) else "mixed"
+    labels = sorted({label for s in scenarios for h in s["haplotypes"] for label in h["consequences"]} - _UNCHANGED_PROTEIN)
+    disruptive = [label for label in DISRUPTIVE if label in labels]
+    tier = 1 if verdict == "mixed" else 2 if verdict == "none" and disruptive else 3 if verdict == "none" else 4
+    return {
+        "verdict": verdict,
+        "tier": tier,
+        "arrangements_keeping_reference_protein": sum(keeps),
+        "changes": labels,
+        "disruptive": disruptive,
     }
