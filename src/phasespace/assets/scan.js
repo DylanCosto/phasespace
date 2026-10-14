@@ -111,6 +111,12 @@
         const disruptive = (row.disruptive || "").split(",");
         (row.changes || "").split(",").filter(Boolean).forEach(function (key) { pills.append(element("span", disruptive.indexOf(key) >= 0 ? "disruptive" : "", LABELS[key] || key)); });
         if (Number(row.splice_region)) pills.append(element("span", "splice", "Splice region ×" + row.splice_region));
+        if (row.protein_changes) {
+          const list = row.protein_changes.split("; ");
+          const chip = element("span", "pchanges", list.slice(0, 3).join(", ") + (list.length > 3 ? " +" + (list.length - 3) : ""));
+          chip.title = list.join("\n");
+          pills.append(chip);
+        }
         if (!pills.children.length) pills.append(element("span", "", "Synonymous only"));
         changes.append(pills);
       }

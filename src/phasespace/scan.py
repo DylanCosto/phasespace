@@ -26,7 +26,7 @@ from .report import _script_json, write_report
 
 TIERS = {1: "Phase decides", 2: "No reference protein, disruptive", 3: "No reference protein", 4: "Reference protein kept"}
 COLUMNS = ["tier", "gene", "transcript", "selection", "contig", "verdict", "variants", "heterozygous", "phased",
-           "blocks", "arrangements", "protein_outcomes", "changes", "disruptive", "splice_region", "info",
+           "blocks", "arrangements", "protein_outcomes", "changes", "protein_changes", "disruptive", "splice_region", "info",
            "read_fragments", "read_supported_relationships", "verdict_with_reads", "unknown_cds_bases",
            "cds_bases", "status", "report"]
 
@@ -72,7 +72,9 @@ def _scan_one(model: TranscriptModel) -> dict:
     summary = result["summary"]
     row.update(tier=summary["tier"], verdict=summary["verdict"], blocks=len(result["blocks"]),
                arrangements=result["scenario_count"], protein_outcomes=result["protein_outcome_count"],
-               changes=",".join(summary["changes"]), disruptive=",".join(summary["disruptive"]))
+               changes=",".join(summary["changes"]), disruptive=",".join(summary["disruptive"]),
+               protein_changes="; ".join(dict.fromkeys(change for s in result["scenarios"] for h in s["haplotypes"]
+                                                       for change in h.get("protein_changes", []) if change != "p.=")))
     wanted = settings["reports"] == "all" or (settings["reports"] == "candidates" and summary["tier"] <= 2)
     if wanted:
         result.update(synthetic=False, version=__version__, analysis_seconds=0.0)

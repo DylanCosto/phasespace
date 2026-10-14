@@ -62,6 +62,10 @@ GATK 4.6.2.0 HaplotypeCaller (`-ERC GVCF`) was run on the GIAB Illumina reads ov
 - `python -m build` produces an sdist and wheel that pass `twine check`. The wheel was installed into a clean environment (Python 3.11 with pysam only) and ran `scan --reads` on the HG002 fixture from outside the checkout.
 - The Docker image builds and runs. The Nextflow example pipeline ran both test samples in Docker with Nextflow 26.10.
 
+## Protein notation (2026-10-14)
+
+For the 522 GIAB chr20 coding alleles analysed singly, PhaseSpace's p. changes match the amino-acid changes from `bcftools csq` for all 213 missense and nonsense substitutions and all 300 synonymous alleles. All 8 in-frame indels match in meaning, in HGVS form: `p.Val7_Leu8del` (bcftools `6LVL>6L`), `p.Asp130del`, `p.Ala230_Gly231insSer`, `p.Gly834_Pro835dup`, and others. The one frameshift gives `p.Pro106ArgfsTer?`, the same first changed residue as bcftools. Because changes are described per copy, phased calls in one codon are combined: with trio phase, SIRPA c.298A>G and c.300C>A give p.Asn100Glu, not the p.Asn100Asp and p.Asn100Lys that each gives alone.
+
 ## Important scope
 
 These tests establish behavior for the supported computational model. They do not establish biological function or clinical performance. Transcript annotation completeness, genotype quality, the correct reference build and supported genetic code remain necessary inputs. Missing evidence never becomes an inferred reference call.

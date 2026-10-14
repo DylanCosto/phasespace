@@ -453,6 +453,14 @@
     headline.append(element("strong", "", number(haplotype.protein_length) + " aa"), document.createTextNode(" of " + number(data.reference_protein_length) + " in the reference"));
     head.append(element("span", "copy-badge", copyIndex ? "B" : "A"), title, pill, headline);
     copy.append(head);
+    const changes = (haplotype.protein_changes || []).filter(function (change) { return change !== "p.="; });
+    if (changes.length || (haplotype.protein_changes || []).length) {
+      const list = element("div", "protein-changes");
+      list.append(element("span", "chips-caption", "Protein"));
+      (changes.length ? changes : ["p.= (unchanged)"]).slice(0, 8).forEach(function (change) { list.append(element("span", "chip", change)); });
+      if (changes.length > 8) list.append(tip(element("span", "chips-caption", "+" + (changes.length - 8) + " more"), changes.slice(8).join("\n")));
+      copy.append(list);
+    }
 
     const label = element("div", "track-label");
     label.append(element("span", "", "Coding sequence"), element("span", "", number(reference.length) + " nt reference · " + plural(exons.length, "exon")));
@@ -605,7 +613,11 @@
           if (DISRUPTIVE.indexOf(key) >= 0 && !seen.has(key)) { seen.add(key); flags.append(element("span", "sev-critical", consequenceLabel(key))); }
         });
       });
-      card.append(top, glyph, flags);
+      const described = first.haplotypes.map(function (haplotype, copyIndex) {
+        const changes = (haplotype.protein_changes || []).filter(function (change) { return change !== "p.="; });
+        return (copyIndex ? "B: " : "A: ") + (changes.length ? changes.slice(0, 3).join(", ") + (changes.length > 3 ? " …" : "") : "reference protein");
+      });
+      card.append(top, glyph, flags, element("p", "outcome-changes", described.join("  ·  ")));
       card.setAttribute("aria-label", "Outcome " + outcomeNumber.get(first.outcome_key) + ", " + plural(group.length, "arrangement") + ", copy proteins " + first.haplotypes.map(function (haplotype) { return haplotype.protein_length + " amino acids"; }).join(" and "));
       card.addEventListener("click", function () { state.selectedId = first.id; renderSelected(); });
       grid.append(card);

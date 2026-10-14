@@ -101,6 +101,7 @@ The image (see `Dockerfile`) is published to GitHub Container Registry for each 
 - All supported phase arrangements consistent with the recorded genotype order and phase sets.
 - Distinct **unordered pairs of coding sequences**, with the original arrangements retained.
 - Joint sequence effects, including premature stops, amino-acid changes, frameshifts, and compensating indels.
+- HGVS-style protein changes for each copy (`p.Gln8Ter`, `p.Val7_Leu8del`, `p.Lys2AsnfsTer2`), derived from the copy's jointly edited sequence. Two calls in one codon give the amino acid actually made. On HG002, SIRPA's c.298A>G (alone p.Asn100Asp) and c.300C>A (alone p.Asn100Lys) sit on one copy and give p.Asn100Glu. Substitutions follow HGVS exactly; indels are trimmed but not shifted 3′ across repeats outside the changed stretch.
 - Reference-call support, called-variant evidence, and unknown intervals across the annotated CDS.
 - Hypothetical block-orientation constraints and informative block-pair comparisons.
 - A verdict on whether any arrangement keeps a copy with the reference protein sequence, and whether that depends on phase. Synonymous changes alter the CDS but not this verdict.
