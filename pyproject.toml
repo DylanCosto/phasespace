@@ -10,6 +10,8 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = ["pysam>=0.23,<0.25"]
 authors = [{name = "Dylan Costo"}]
+license = "MIT"
+license-files = ["LICENSE"]
 classifiers = ["Development Status :: 3 - Alpha", "Topic :: Scientific/Engineering :: Bio-Informatics", "Programming Language :: Python :: 3"]
 
 [project.optional-dependencies]

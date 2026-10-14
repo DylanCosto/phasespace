@@ -1,0 +1,28 @@
+name: nextflow
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths: ['nextflow/**', 'src/**', 'Dockerfile', '.github/workflows/nextflow.yml']
+permissions:
+  contents: read
+jobs:
+  test-profile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Install Nextflow
+        run: |
+          curl -fsSL https://get.nextflow.io | bash
+          sudo mv nextflow /usr/local/bin/
+      - name: Build image
+        run: docker build -t phasespace:ci .
+      - name: Run the test profile on the HG002 fixture
+        run: |
+          nextflow run nextflow/main.nf -profile docker,test --phasespace_container phasespace:ci -ansi-log false
+          test -s results-test/phasespace/HG002/scan.tsv
+          grep -q "SIRPA" results-test/phasespace/HG002_phased/scan.tsv

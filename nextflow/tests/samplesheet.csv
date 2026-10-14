@@ -1,0 +1,3 @@
+sample,vcf,phased_vcf,reads
+HG002,../../tests/data/hg002_chr20/deepvariant.HG002.vcf.gz,,
+HG002_phased,../../tests/data/hg002_chr20/deepvariant.HG002.vcf.gz,../../tests/data/hg002_chr20/whatshap.HG002.vcf.gz,../../tests/data/hg002_chr20/hifi.HG002.bam

@@ -1,0 +1,14 @@
+.git
+.github
+tests
+docs
+examples
+scripts
+paper
+nextflow
+packaging
+reports
+dist
+build
+**/__pycache__
+*.egg-info

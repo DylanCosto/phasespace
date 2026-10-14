@@ -86,6 +86,15 @@ phasespace report --vcf sample.g.vcf.gz --phase-from phased.vcf.gz \
 
 Heterozygous calls are matched by position, REF and called allele sequences, so allele numbering may differ between the files (for example in a multi-sample trio VCF). A matched call takes its GT order and `PS` from the phase file. With `--phase-from`, phase comes only from that file: any heterozygous call it does not phase is treated as unphased, so phase sets from the two files are never mixed. The report notes how many calls were phased. If the phase file has one sample with a different name, that sample is used. `scripts/transfer_phase.py` writes the same phase into a gVCF, for use with other tools.
 
+### Docker and Nextflow
+
+```bash
+docker run --rm -v "$PWD:/data" -w /data ghcr.io/dylancosto/phasespace:0.2.0 \
+  phasespace scan --vcf sample.g.vcf.gz --fasta ref.fa --annotation genes.gtf.gz --out-dir scan
+```
+
+The image (see `Dockerfile`) is published to GitHub Container Registry for each release. `nextflow/` provides nf-core-style `PHASESPACE_SCAN` and `PHASESPACE_REPORT` modules and an example samplesheet pipeline (`nextflow run nextflow/main.nf -profile docker,test`); see [nextflow/README.md](nextflow/README.md).
+
 ## What the report shows
 
 - All supported phase arrangements consistent with the recorded genotype order and phase sets.
