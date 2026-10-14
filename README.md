@@ -55,6 +55,14 @@ Add `--reads sample.bam` (repeatable; CRAM uses `--fasta`) to `report` or `scan`
 
 The report shows these as **observed counts**, kept separate from hypotheses. A relationship is "supported" with at least 3 fragments and 90% agreement, and **Apply read-supported relationships** adds them as hypotheses tagged "reads". Within existing phase blocks, the report also shows how often reads agree with the input phase. Scans add `verdict_with_reads`. Nothing is converted into a probability, and the input calls never change. Long reads matter most: on HG002, HiFi reads resolved CDC25B variants 1–6 kb apart that Illumina pairs could not reach.
 
+### Inheritance evidence from parents
+
+`--parents FATHER,MOTHER` (sample names; `--parents-from trio.vcf.gz` if they are not in the main VCF) works out which parent passed on each allele of the child's heterozygous calls. Calls whose alleles came from the same parent sit on one copy. A site is informative when only one assignment fits the parents' genotypes. Sites where both parents are heterozygous stay open, and impossible combinations are counted as Mendelian conflicts and never used. Parents' genotypes need passing filters and GQ ≥ `--min-gq`. Depth is checked when present; merged trio files often lack it for genotypes filled from gVCF blocks. Missing parental sites can come from gVCF reference blocks. As with reads, the report shows this as observed evidence with an **Apply inherited relationships** button, and scans add `verdict_with_parents` and `mendelian_conflicts`.
+
+### Link blocks by evidence before enumerating (`--link-evidence`)
+
+Without it, read and inheritance evidence only filter arrangements after they are enumerated, so a gene over the block cap cannot be analysed at all. `--link-evidence` (with `--reads` and/or `--parents`) merges blocks the evidence clearly links before enumerating: the same "supported" thresholds, strongest evidence first. A relationship that contradicts stronger ones is skipped and reported. Linked blocks are labelled with their sources, and the report states that the arrangements assume this evidence. On HG002, SIRPA (20 unphased heterozygous calls, far over the cap) becomes a single arrangement, and HiFi reads, Illumina reads and the parents each give the identical result.
+
 ### Show annotations you already have
 
 `--info CLNSIG,AF` shows those INFO fields for each variant in reports and scans. By default they come from the main VCF. `--info-from clinvar.vcf.gz` reads them from a separate indexed VCF, such as ClinVar or gnomAD sites, matching calls by position, REF and ALT. Contig names may differ by a `chr` prefix. Per-allele fields (`Number=A` or `R`) are taken for the called alternate alleles. Nothing is looked up online.
@@ -73,7 +81,7 @@ This analyses one representative transcript per protein-coding gene and ranks th
 3. **No reference protein** (often common homozygous missense variants).
 4. **Reference protein kept.**
 
-The scan writes `scan/index.html` (sortable and filterable), `scan.tsv`, `scan.json`, and reports for tiers 1–2 (`--reports all` writes one for every gene with variants). Restrict it to a panel with `--genes CFTR,PAH` or `--genes @panel.txt`. `--phase-from`, thresholds and `--max-blocks` work as for `report`. Genes on contigs absent from the reference or VCF are counted but not listed, so single-chromosome and exome inputs work. A whole-genome GENCODE scan of HG002 chr20 calls takes under 20 seconds on 12 processes.
+The scan writes `scan/index.html` (sortable and filterable), `scan.tsv` (one row per gene), `variants.tsv` (one row per call: its effect alone, genotype, phase, block, splice flag, annotations, read allele counts, parent of origin), `scan.json`, and reports for tiers 1–2 (`--reports all` writes one for every gene with variants). Restrict it to a panel with `--genes CFTR,PAH` or `--genes @panel.txt`. `--phase-from`, thresholds and `--max-blocks` work as for `report`. Genes on contigs absent from the reference or VCF are counted but not listed, so single-chromosome and exome inputs work. A whole-genome GENCODE scan of HG002 chr20 calls takes under 20 seconds on 12 processes.
 
 ### Using phase from WhatsHap, longphase or a trio
 
@@ -101,6 +109,7 @@ The image (see `Dockerfile`) is published to GitHub Container Registry for each 
 - All supported phase arrangements consistent with the recorded genotype order and phase sets.
 - Distinct **unordered pairs of coding sequences**, with the original arrangements retained.
 - Joint sequence effects, including premature stops, amino-acid changes, frameshifts, and compensating indels.
+- HGVS-style protein changes for each copy (`p.Gln8Ter`, `p.Val7_Leu8del`, `p.Lys2AsnfsTer2`), derived from the copy's jointly edited sequence. Two calls in one codon give the amino acid actually made. On HG002, SIRPA's c.298A>G (alone p.Asn100Asp) and c.300C>A (alone p.Asn100Lys) sit on one copy and give p.Asn100Glu. Substitutions follow HGVS exactly; indels are trimmed but not shifted 3′ across repeats outside the changed stretch.
 - Reference-call support, called-variant evidence, and unknown intervals across the annotated CDS.
 - Hypothetical block-orientation constraints and informative block-pair comparisons.
 - A verdict on whether any arrangement keeps a copy with the reference protein sequence, and whether that depends on phase. Synonymous changes alter the CDS but not this verdict.

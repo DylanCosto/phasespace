@@ -13,6 +13,7 @@ from hashlib import sha256
 from itertools import combinations, product
 import json
 
+from .hgvs import coding_change, protein_changes
 from .models import Locus, PhaseSpaceError, Variant
 
 
@@ -155,6 +156,25 @@ def _edit_origins(start: int, ref: str, alt: str) -> list[int | None]:
     )
 
 
+def _alignment(full: str, origins: list[int | None], deltas: list[int]) -> dict[int, tuple[int, str]]:
+    """Reference codon index -> (alternate codon index, amino acid) for codons
+    that descend intact from the reference."""
+    if not any(deltas):
+        # Substitutions keep every base at its reference coordinate.
+        return {index: (index, amino) for index, amino in enumerate(full)}
+    aligned = {}
+    for index, amino in enumerate(full):
+        origin = origins[index * 3]
+        if (
+            origin is not None
+            and origin % 3 == 0
+            and origins[index * 3 + 1] == origin + 1
+            and origins[index * 3 + 2] == origin + 2
+        ):
+            aligned[origin // 3] = (index, amino)
+    return aligned
+
+
 def _consequences(
     reference: str,
     cds: str,
@@ -162,6 +182,7 @@ def _consequences(
     deltas: list[int],
     reference_translation: tuple[str, int | None, str],
     translation: tuple[str, int | None, str],
+    aligned: dict[int, tuple[int, str]],
 ) -> list[str]:
     if cds == reference:
         return ["reference"]
@@ -178,21 +199,6 @@ def _consequences(
 
     # A retained terminal stop moves after an in-frame insertion/deletion. Its
     # amino-acid index alone therefore cannot identify a gained or lost stop.
-    aligned: dict[int, tuple[int, str]]
-    if not any(deltas):
-        # Substitutions keep every base at its reference coordinate.
-        aligned = {index: (index, amino) for index, amino in enumerate(full)}
-    else:
-        aligned = {}
-        for index, amino in enumerate(full):
-            origin = origins[index * 3]
-            if (
-                origin is not None
-                and origin % 3 == 0
-                and origins[index * 3 + 1] == origin + 1
-                and origins[index * 3 + 2] == origin + 2
-            ):
-                aligned[origin // 3] = (index, amino)
     if first_stop is not None:
         bases = origins[(first_stop - 1) * 3 : first_stop * 3]
         origin = bases[0]
@@ -247,16 +253,39 @@ def _haplotype(
         origins[start:end] = _edit_origins(start, variant.cds_ref.upper(), allele)
         deltas.append(len(allele) - (end - start))
     translation = _translation(cds)
-    protein, first_stop, _ = translation
+    protein, first_stop, full = translation
+    aligned = _alignment(full, origins, deltas)
+    consequences = _consequences(reference, cds, origins, deltas, reference_translation, translation, aligned)
+    if cds == reference:
+        changes: list[str] = []
+    else:
+        _, ref_first_stop, ref_full = reference_translation
+        alt_to_ref = {alt_index: ref_index for ref_index, (alt_index, _) in aligned.items()}
+        changes = protein_changes(ref_full, ref_first_stop, full, first_stop, alt_to_ref, "frameshift" in consequences)
     return {
         "variant_ids": [variant.id for variant, _ in edits],
         "alleles": [allele for _, allele in edits],
         "cds": cds,
         "protein": protein,
-        "consequences": _consequences(reference, cds, origins, deltas, reference_translation, translation),
+        "consequences": consequences,
+        "protein_changes": changes,
         "first_stop": first_stop,
         "protein_length": len(protein),
     }
+
+
+def _effects(reference: str, variant: Variant, reference_translation: tuple[str, int | None, str]) -> list[dict]:
+    """Each alternate allele's effect on its own, for comparison with joint copies."""
+    effects = []
+    for index, allele in enumerate(variant.cds_alleles):
+        allele = allele.upper()
+        if allele == variant.cds_ref.upper() or any(e["cds_allele"] == allele for e in effects):
+            continue
+        alone = _haplotype(reference, [(variant, allele)], reference_translation)
+        effects.append({"allele": variant.alleles[index].upper(), "cds_allele": allele,
+                        "coding_change": coding_change(variant.cds_start, variant.cds_ref, allele),
+                        "protein_change": "; ".join(alone["protein_changes"]), "consequences": alone["consequences"]})
+    return effects
 
 
 def _outcome_key(haplotypes: list[dict]) -> str:
@@ -373,7 +402,7 @@ def analyze(locus: Locus, max_blocks: int = 8) -> dict:
         "schema_version": 1,
         "sample": locus.sample,
         "transcript": asdict(locus.transcript),
-        "variants": [dict(asdict(v), block=membership.get(v.id)) for v in variants],
+        "variants": [dict(asdict(v), block=membership.get(v.id), effects=_effects(reference, v, reference_translation)) for v in variants],
         "evidence": [asdict(e) for e in locus.evidence],
         "warnings": list(dict.fromkeys(warnings)),
         "source": locus.source,

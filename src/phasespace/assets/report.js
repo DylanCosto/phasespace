@@ -181,7 +181,14 @@
   const variants = data.variants || [];
   const spliceRegion = data.splice_region || [];
   const readEvidence = data.read_evidence || null;
+  const parentEvidence = data.inheritance_evidence || null;
   const infoText = function (variant) { return Object.keys(variant.info || {}).map(function (key) { return key + "=" + variant.info[key]; }).join("  ·  "); };
+  const originText = function (variant) {
+    const origin = parentEvidence && parentEvidence.variants[variant.id];
+    if (!origin) return "";
+    if (origin.status === "informative") return "\nFrom father: " + variant.alleles[origin.paternal_allele] + " · from mother: " + variant.alleles[1 - origin.paternal_allele];
+    return "\nParent of origin: " + ({ uninformative: "unclear (both parents heterozygous)", conflict: "Mendelian conflict", unknown: "parents not genotyped" }[origin.status] || origin.status);
+  };
   const readText = function (variant) {
     const counts = readEvidence && readEvidence.variants[variant.id];
     if (!counts) return "";
@@ -362,8 +369,13 @@
     if (verdict.tone !== "empty" && evidence.counts.unknown > 0) detail += " Applies to included calls only: " + plural(evidence.counts.unknown, "coding base") + (evidence.counts.unknown === 1 ? " lacks" : " lack") + " evidence.";
     if (readEvidence && verdict.tone !== "empty" && readEvidence.supported.length && !state.constraints.some(function (c) { return c.source === "reads"; })) {
       const outcome = { good: "a copy keeps the reference protein in every remaining arrangement", none: "no remaining arrangement keeps a reference-protein copy",
-        mixed: "phase still decides", conflicting: "the read-supported relationships contradict each other" }[readEvidence.verdict_with_reads];
+        mixed: "phase still decides", conflicting: "the read-supported relationships contradict each other" }[readEvidence.verdict_with];
       detail += " Reads clearly support " + plural(readEvidence.supported.length, "block relationship") + "; with them applied, " + outcome + ".";
+    }
+    if (parentEvidence && verdict.tone !== "empty" && parentEvidence.supported.length && !state.constraints.some(function (c) { return c.source === "parents"; })) {
+      const parentOutcome = { good: "a copy keeps the reference protein in every remaining arrangement", none: "no remaining arrangement keeps a reference-protein copy",
+        mixed: "phase still decides", conflicting: "the inherited relationships contradict each other" }[parentEvidence.verdict_with];
+      detail += " Inheritance supports " + plural(parentEvidence.supported.length, "block relationship") + "; with them applied, " + parentOutcome + ".";
     }
     if (verdict.tone !== "empty" && spliceRegion.length) detail += " " + plural(spliceRegion.length, "splice-region variant") + " not modelled; splicing could change this.";
     text("verdict-title", title);
@@ -453,6 +465,14 @@
     headline.append(element("strong", "", number(haplotype.protein_length) + " aa"), document.createTextNode(" of " + number(data.reference_protein_length) + " in the reference"));
     head.append(element("span", "copy-badge", copyIndex ? "B" : "A"), title, pill, headline);
     copy.append(head);
+    const changes = (haplotype.protein_changes || []).filter(function (change) { return change !== "p.="; });
+    if (changes.length || (haplotype.protein_changes || []).length) {
+      const list = element("div", "protein-changes");
+      list.append(element("span", "chips-caption", "Protein"));
+      (changes.length ? changes : ["p.= (unchanged)"]).slice(0, 8).forEach(function (change) { list.append(element("span", "chip", change)); });
+      if (changes.length > 8) list.append(tip(element("span", "chips-caption", "+" + (changes.length - 8) + " more"), changes.slice(8).join("\n")));
+      copy.append(list);
+    }
 
     const label = element("div", "track-label");
     label.append(element("span", "", "Coding sequence"), element("span", "", number(reference.length) + " nt reference · " + plural(exons.length, "exon")));
@@ -477,7 +497,7 @@
       const center = pct((variant.cds_start + Math.max(variant.cds_end, variant.cds_start + 1)) / 2);
       const pin = element("span", "pin");
       pin.style.left = center + "%";
-      const labelNode = tip(element("span", "pin-label" + (spliceIds.has(variant.id) ? " splice" : ""), name), name + "\n" + variant.id + "\nGT " + variant.gt.join(variant.phased ? "|" : "/") + (variant.block ? " · " + blockName(variant.block) : " · on both copies") + (spliceIds.has(variant.id) ? "\nSplice region: effect on splicing not modelled" : "") + (infoText(variant) ? "\n" + infoText(variant) : "") + readText(variant));
+      const labelNode = tip(element("span", "pin-label" + (spliceIds.has(variant.id) ? " splice" : ""), name), name + "\n" + variant.id + "\nGT " + variant.gt.join(variant.phased ? "|" : "/") + (variant.block ? " · " + blockName(variant.block) : " · on both copies") + (spliceIds.has(variant.id) ? "\nSplice region: effect on splicing not modelled" : "") + (infoText(variant) ? "\n" + infoText(variant) : "") + readText(variant) + originText(variant));
       pin.append(labelNode, element("span", "pin-stem"));
       pins.append(pin);
       const head = element("span", "pin-head");
@@ -605,7 +625,11 @@
           if (DISRUPTIVE.indexOf(key) >= 0 && !seen.has(key)) { seen.add(key); flags.append(element("span", "sev-critical", consequenceLabel(key))); }
         });
       });
-      card.append(top, glyph, flags);
+      const described = first.haplotypes.map(function (haplotype, copyIndex) {
+        const changes = (haplotype.protein_changes || []).filter(function (change) { return change !== "p.="; });
+        return (copyIndex ? "B: " : "A: ") + (changes.length ? changes.slice(0, 3).join(", ") + (changes.length > 3 ? " …" : "") : "reference protein");
+      });
+      card.append(top, glyph, flags, element("p", "outcome-changes", described.join("  ·  ")));
       card.setAttribute("aria-label", "Outcome " + outcomeNumber.get(first.outcome_key) + ", " + plural(group.length, "arrangement") + ", copy proteins " + first.haplotypes.map(function (haplotype) { return haplotype.protein_length + " amino acids"; }).join(" and "));
       card.addEventListener("click", function () { state.selectedId = first.id; renderSelected(); });
       grid.append(card);
@@ -689,13 +713,14 @@
     const tbody = byId("variants-body");
     if (!variants.length) {
       const row = element("tr");
-      const cell = element("td", "", "No called coding variants in the supported input evidence."); cell.colSpan = 9; row.append(cell); tbody.append(row);
+      const cell = element("td", "", "No called coding variants in the supported input evidence."); cell.colSpan = 10; row.append(cell); tbody.append(row);
     }
     variants.forEach(function (variant) {
       const row = element("tr");
       const changes = Array.from(new Set(variant.cds_alleles.filter(function (allele) { return allele.toUpperCase() !== variant.cds_ref.toUpperCase(); }).map(function (allele) { return changeLabel(variant, allele); })));
       const block = variant.block || variant.block_id;
-      [[variant.id + (spliceIds.has(variant.id) ? " · splice region" : ""), "mono"], [changes.join(", "), "mono"], [transcript.contig + ":" + number(variant.pos + 1), "mono"], [variant.ref + " → " + Array.from(new Set(variant.alleles)).join(" / "), "mono"],
+      const alone = (variant.effects || []).map(function (effect) { return effect.protein_change; }).join(", ");
+      [[variant.id + (spliceIds.has(variant.id) ? " · splice region" : ""), "mono"], [changes.join(", "), "mono"], [alone || "—", "mono"], [transcript.contig + ":" + number(variant.pos + 1), "mono"], [variant.ref + " → " + Array.from(new Set(variant.alleles)).join(" / "), "mono"],
         [variant.gt.join(variant.phased ? "|" : "/"), "mono"], [variant.phase_set == null ? "—" : variant.phase_set, "mono"], [block ? blockName(block) : "Both copies", ""],
         [variant.gq == null ? "—" : number(variant.gq), "num"], [variant.dp == null ? "—" : number(variant.dp), "num"]].forEach(function (cell) {
         row.append(element("td", cell[1], cell[0]));
@@ -717,7 +742,7 @@
     state.constraints.forEach(function (constraint, index) {
       const row = element("li");
       const label = element("span", "", blockName(constraint.a) + " ↔ " + blockName(constraint.b));
-      label.append(element("span", "relation" + (constraint.source === "reads" ? " from-reads" : ""), (constraint.parity === 0 ? "same" : "opposite") + (constraint.source === "reads" ? " · reads" : "")));
+      label.append(element("span", "relation" + (constraint.source ? " from-reads" : ""), (constraint.parity === 0 ? "same" : "opposite") + (constraint.source ? " · " + constraint.source : "")));
       const remove = element("button", "remove-constraint", "×");
       remove.type = "button";
       remove.setAttribute("aria-label", "Remove hypothesis between " + blockName(constraint.a) + " and " + blockName(constraint.b));
@@ -732,13 +757,13 @@
     if (existing < 0) state.constraints.push(constraint); else state.constraints[existing] = constraint;
   }
 
-  function renderReads() {
-    if (!readEvidence || !blocks.length) return;
-    byId("reads-section").hidden = false;
-    const supported = new Set(readEvidence.supported.map(function (c) { return c.a + "|" + c.b; }));
-    const container = byId("read-pairs");
-    if (!readEvidence.pairs.length) container.append(element("p", "help", "No read covers two different blocks with clear alleles at both."));
-    readEvidence.pairs.forEach(function (pair) {
+  function renderEvidencePanel(evidence, ids, options) {
+    if (!evidence || !blocks.length) return;
+    byId(ids.section).hidden = false;
+    const supported = new Set(evidence.supported.map(function (c) { return c.a + "|" + c.b; }));
+    const container = byId(ids.pairs);
+    if (!evidence.pairs.length) container.append(element("p", "help", options.empty));
+    evidence.pairs.forEach(function (pair) {
       const card = element("div", "read-pair" + (supported.has(pair.block_a + "|" + pair.block_b) ? " supported" : ""));
       const top = element("div", "read-pair-top");
       top.append(element("strong", "", blockName(pair.block_a) + " ↔ " + blockName(pair.block_b)), element("span", "", number(pair.same) + " same · " + number(pair.opposite) + " opposite"));
@@ -750,15 +775,36 @@
       card.append(top, bar);
       container.append(card);
     });
-    const within = readEvidence.within_blocks;
+    const within = evidence.within_blocks;
     const total = within.agree + within.disagree;
-    text("read-within", total ? "Within blocks, reads agree with the input phase in " + number(within.agree) + " of " + number(total) + " observations." : "");
-    text("read-rule", "Supported means at least " + readEvidence.thresholds.min_reads + " fragments, " + Math.round(100 * readEvidence.thresholds.min_fraction) + "% agreeing. From " + readEvidence.files.join(", ") + " (" + plural(readEvidence.fragments, "informative fragment") + ").");
-    const apply = byId("apply-reads");
-    apply.disabled = !readEvidence.supported.length;
+    text(ids.within, total ? options.within(within.agree, total) : "");
+    text(ids.rule, options.rule(evidence));
+    const apply = byId(ids.apply);
+    apply.disabled = !evidence.supported.length;
     apply.addEventListener("click", function () {
-      readEvidence.supported.forEach(function (c) { applyConstraint({ a: c.a, b: c.b, parity: c.parity, source: "reads" }); });
+      evidence.supported.forEach(function (c) { applyConstraint({ a: c.a, b: c.b, parity: c.parity, source: options.source }); });
       update();
+    });
+  }
+
+  function renderReads() {
+    renderEvidencePanel(readEvidence, { section: "reads-section", pairs: "read-pairs", within: "read-within", rule: "read-rule", apply: "apply-reads" }, {
+      source: "reads",
+      empty: "No read covers two different blocks with clear alleles at both.",
+      within: function (agree, total) { return "Within blocks, reads agree with the input phase in " + number(agree) + " of " + number(total) + " observations."; },
+      rule: function (e) { return "Supported means at least " + e.thresholds.min_count + " fragments, " + Math.round(100 * e.thresholds.min_fraction) + "% agreeing. From " + e.files.join(", ") + " (" + plural(e.fragments, "informative fragment") + ")."; }
+    });
+  }
+
+  function renderParents() {
+    renderEvidencePanel(parentEvidence, { section: "parents-section", pairs: "parent-pairs", within: "parent-within", rule: "parent-rule", apply: "apply-parents" }, {
+      source: "parents",
+      empty: "No two blocks both have a call whose parent of origin is clear.",
+      within: function (agree, total) { return "Within blocks, inheritance agrees with the input phase for " + number(agree) + " of " + number(total) + " call pairs."; },
+      rule: function (e) {
+        const informative = Object.keys(e.variants).filter(function (id) { return e.variants[id].status === "informative"; }).length;
+        return "Father " + e.father + ", mother " + e.mother + " (" + e.source + "). Parent of origin is clear for " + plural(informative, "call") + (e.conflicts ? "; " + plural(e.conflicts, "call") + " conflict with Mendelian inheritance and are not used" : "") + ". Supported means every informative pair agrees.";
+      }
     });
   }
 
@@ -922,6 +968,7 @@
   setupTooltip();
   renderInformative();
   renderReads();
+  renderParents();
   validatePair();
   update();
 })();

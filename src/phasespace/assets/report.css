@@ -234,6 +234,10 @@ h1 { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; font-
 .pin-stem { position: absolute; left: -1px; top: 22px; bottom: 0; width: 2px; background: var(--copy); }
 .pin.collapsed .pin-label, .pin.collapsed .pin-stem { display: none; }
 .pin-label.splice { box-shadow: inset 0 -2px 0 var(--warning); }
+.protein-changes { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin: -4px 0 14px; }
+.protein-changes .chip { font-family: var(--mono); font-size: 12px; font-weight: 600; line-height: 22px; padding: 0 8px; border-radius: 6px; background: var(--surface-2); border: 1px solid var(--border); }
+.protein-changes .chips-caption, .change-chips .chips-caption { font-size: 11.5px; color: var(--muted); margin-right: 2px; }
+.outcome-changes { font-family: var(--mono); font-size: 11px; color: var(--ink-2); line-height: 1.5; overflow-wrap: anywhere; }
 .change-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin-top: 4px; }
 .change-chips .chips-caption { font-size: 11.5px; color: var(--muted); margin-right: 2px; }
 .change-chips .chip { font-family: var(--mono); font-size: 11.5px; font-weight: 600; line-height: 20px; padding: 0 7px; border-radius: 6px; background: var(--copy-soft); border: 1px solid color-mix(in srgb, var(--copy) 35%, transparent); }

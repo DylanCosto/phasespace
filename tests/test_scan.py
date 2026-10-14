@@ -156,3 +156,27 @@ def test_scan_requires_an_indexed_vcf(tmp_path):
         for record in source:
             out.write(record)
     assert main(["scan", "--vcf", str(plain), "--fasta", str(FASTA), "--annotation", str(GTF), "--out-dir", str(tmp_path / "scan")]) == 2
+
+
+def test_variants_tsv_combines_effects_alone_and_evidence(tmp_path):
+    out = tmp_path / "scan"
+    assert main(["scan", "--vcf", str(DATA / "deepvariant.HG002.vcf.gz"), "--fasta", str(FASTA), "--annotation", str(GTF),
+                 "--reads", str(DATA / "hifi.HG002.bam"), "--parents", "HG003,HG004", "--parents-from", str(DATA / "whatshap.HG002.vcf.gz"),
+                 "--info", "platforms", "--info-from", str(DATA / "giab.HG002.vcf.gz"), "--link-evidence", "--max-blocks", "12",
+                 "--threads", "1", "--out-dir", str(out)]) == 0
+    rows = {row["variant"]: row for row in csv.DictReader(open(out / "variants.tsv"), delimiter="\t")}
+    first, second = rows["chr20:1915317:A>G"], rows["chr20:1915319:C>A"]
+    # Alone each changes Asn100 differently; both came from the mother, so one copy carries both (p.Asn100Glu).
+    assert (first["coding_change"], first["protein_change_alone"], first["parent_of_origin"]) == ("c.298A>G", "p.Asn100Asp", "father:A mother:G")
+    assert (second["coding_change"], second["protein_change_alone"], second["parent_of_origin"]) == ("c.300C>A", "p.Asn100Lys", "father:C mother:A")
+    assert first["block"] == second["block"] == "Linked by parents and reads"
+    genes = {row["gene"]: row for row in csv.DictReader(open(out / "scan.tsv"), delimiter="\t")}
+    assert "p.Asn100Glu" in genes["SIRPA"]["protein_changes"].split("; ")
+    assert rows["chr20:145669:ACC>A"]["block"] == "both copies" and rows["chr20:145669:ACC>A"]["info_platforms"] == "5"
+    assert rows["chr20:47651092:ACAG>A"]["read_alleles"] == "ACAGx18 Ax24"
+
+
+def test_report_variants_carry_effects_alone():
+    result = analyze(load_locus(DATA / "trio.HG002.vcf.gz", FASTA, GTF, FIXTURE["SIRPA"]), max_blocks=12)
+    effects = {v["id"]: v["effects"][0]["protein_change"] for v in result["variants"]}
+    assert (effects["chr20:1915317:A>G"], effects["chr20:1915319:C>A"]) == ("p.Asn100Asp", "p.Asn100Lys")

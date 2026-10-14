@@ -109,6 +109,14 @@
           <button id="apply-reads" class="btn btn-block" type="button">Apply read-supported relationships</button>
           <p id="read-rule" class="help"></p>
         </div>
+        <div id="parents-section" class="reads-section" hidden>
+          <h3>Inheritance evidence <span class="tag tag-observed">observed</span></h3>
+          <p class="help">Which parent passed on each allele, from the parents' genotypes. Calls inherited from the same parent sit on one copy.</p>
+          <div id="parent-pairs" class="read-pairs"></div>
+          <p id="parent-within" class="help"></p>
+          <button id="apply-parents" class="btn btn-block" type="button">Apply inherited relationships</button>
+          <p id="parent-rule" class="help"></p>
+        </div>
         <div id="informative-section" class="informative" hidden>
           <h3>Most informative relationships</h3>
           <p class="help">Knowing these would separate the most predicted protein outcomes. This is not a probability.</p>
@@ -140,7 +148,7 @@
       <div id="evidence-map" class="evidence-map"></div>
       <details class="variant-details">
         <summary><span id="variant-count">Variants</span><span class="summary-hint">Genotypes, phase sets and call quality</span></summary>
-        <div class="table-scroll"><table><caption class="sr-only">Called coding variants used in the analysis</caption><thead><tr><th>Variant</th><th>Coding change</th><th>Position</th><th>Alleles</th><th>GT</th><th>PS</th><th>Block</th><th class="num">GQ</th><th class="num">DP</th><th id="info-head" hidden>Annotations</th></tr></thead><tbody id="variants-body"></tbody></table></div>
+        <div class="table-scroll"><table><caption class="sr-only">Called coding variants used in the analysis</caption><thead><tr><th>Variant</th><th>Coding change</th><th>Protein (alone)</th><th>Position</th><th>Alleles</th><th>GT</th><th>PS</th><th>Block</th><th class="num">GQ</th><th class="num">DP</th><th id="info-head" hidden>Annotations</th></tr></thead><tbody id="variants-body"></tbody></table></div>
       </details>
       <details id="splice-panel" class="variant-details" hidden>
         <summary><span id="splice-count">Splice-region variants</span><span class="summary-hint">Within 3 exonic or 8 intronic bases of a coding-exon junction · splicing not modelled</span></summary>

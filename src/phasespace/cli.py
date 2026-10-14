@@ -20,6 +20,9 @@ def _inputs(command: argparse.ArgumentParser) -> None:
     command.add_argument("--phase-from", metavar="PHASED_VCF", help="Phased VCF/BCF (e.g. from WhatsHap or longphase) that supplies GT order and PS for heterozygous calls; the main input still supplies evidence")
     command.add_argument("--max-blocks", type=int, default=8, help="Hard cap on independent heterozygous phase blocks, 0–12 (default: 8)")
     command.add_argument("--reads", metavar="BAM", action="append", default=[], help="Indexed BAM/CRAM; counts reads that show which alleles travel together (repeatable)")
+    command.add_argument("--parents", metavar="FATHER,MOTHER", help="Parent sample names; shows which parent passed on each allele (transmission evidence)")
+    command.add_argument("--parents-from", metavar="VCF", help="Indexed VCF/gVCF with the parents' genotypes (default: the main VCF)")
+    command.add_argument("--link-evidence", action="store_true", help="Merge blocks that --reads/--parents clearly link before enumerating, so loci over the block cap can be analysed; the arrangements then assume that evidence")
     command.add_argument("--info", metavar="FIELDS", help="Comma-separated INFO fields to show for each variant (e.g. CLNSIG,AF)")
     command.add_argument("--info-from", metavar="ANNOTATED_VCF", help="Indexed VCF (e.g. ClinVar or gnomAD sites) to read --info fields from, matched by position, REF and ALT; default: the main VCF")
 
@@ -68,8 +71,17 @@ def _fields(value: str | None) -> tuple[str, ...]:
     return tuple(name.strip() for name in (value or "").split(",") if name.strip())
 
 
+def _parents(value: str | None) -> tuple[str, str] | None:
+    if not value:
+        return None
+    names = [name.strip() for name in value.split(",")]
+    if len(names) != 2 or not all(names):
+        raise PhaseSpaceError("--parents needs two sample names: FATHER,MOTHER.")
+    return names[0], names[1]
+
+
 def _check_not_inputs(args: argparse.Namespace, outputs: list[Path]) -> None:
-    sources = [p for p in (args.vcf, args.fasta, args.annotation, args.phase_from, args.info_from, *args.reads) if p is not None]
+    sources = [p for p in (args.vcf, args.fasta, args.annotation, args.phase_from, args.info_from, args.parents_from, *args.reads) if p is not None]
     inputs = {Path(p).resolve() for p in sources}
     inputs.update(Path(str(p) + suffix).resolve() for p in sources for suffix in (".fai", ".gzi", ".tbi", ".csi"))
     if any(path.resolve() in inputs for path in outputs):
@@ -82,6 +94,8 @@ def _scan(args: argparse.Namespace) -> int:
     from .scan import default_threads, run_scan
     check_max_blocks(args.max_blocks)
     check_thresholds(args.min_gq, args.min_dp)
+    if args.link_evidence and not args.reads and not _parents(args.parents):
+        raise PhaseSpaceError("--link-evidence needs --reads or --parents.")
     if args.out_dir.exists() and any(args.out_dir.iterdir()) and not args.force:
         raise PhaseSpaceError(f"Output directory is not empty: {args.out_dir}. Use --force to write into it.")
     _check_not_inputs(args, [args.out_dir / "index.html", args.out_dir / "scan.tsv", args.out_dir / "scan.json"])
@@ -90,6 +104,7 @@ def _scan(args: argparse.Namespace) -> int:
         raise PhaseSpaceError("--threads must be at least 1.")
     result = run_scan(args.vcf, args.fasta, args.annotation, args.out_dir, sample=args.sample, genes=_gene_list(args.genes),
                       phase_from=args.phase_from, info_fields=_fields(args.info), info_from=args.info_from, reads=args.reads,
+                      parents=_parents(args.parents), parents_from=args.parents_from, link_evidence=args.link_evidence,
                       min_gq=args.min_gq, min_dp=args.min_dp, max_blocks=args.max_blocks,
                       reports=args.reports, threads=threads)
     counts = result["counts"]
@@ -136,11 +151,25 @@ def main(argv: list[str] | None = None) -> int:
                                phase_from=args.phase_from, info_fields=_fields(args.info), info_from=args.info_from)
             if selection:
                 locus.warnings.insert(0, selection)
+            parents = _parents(args.parents)
+            linked = []
+            if args.link_evidence:
+                if not args.reads and not parents:
+                    raise PhaseSpaceError("--link-evidence needs --reads or --parents.")
+                from .linking import link_blocks
+                locus, linked = link_blocks(locus, reads=args.reads, fasta=args.fasta, parents=parents,
+                                            parents_from=args.parents_from or args.vcf, min_gq=args.min_gq, min_dp=args.min_dp)
             result = analyze(locus, max_blocks=args.max_blocks)
+            if linked:
+                from .linking import label_linked
+                label_linked(result, linked)
             result["synthetic"] = False
             if args.reads:
                 from .reads import add_read_evidence
                 add_read_evidence(result, args.reads, args.fasta)
+            if parents:
+                from .inheritance import add_inheritance_evidence
+                add_inheritance_evidence(result, args.parents_from or args.vcf, *parents, min_gq=args.min_gq, min_dp=args.min_dp)
         result["version"] = __version__
         result["analysis_seconds"] = round(time.perf_counter() - started, 6)
         for path in outputs:
