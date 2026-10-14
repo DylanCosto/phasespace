@@ -184,3 +184,14 @@ def test_real_exonic_splice_region_call_in_sirpa():
     hit = next(hit for hit in locus.splice_region if hit["id"] == "chr20:1915454:C>T")
     assert (hit["where"], hit["distance"], hit["junction"]) == ("exon", 2, 1915455)  # Second-to-last exonic base.
     assert any(v.id == hit["id"] for v in locus.variants)
+
+
+def test_info_from_another_real_vcf(tmp_path):
+    # Annotate PacBio calls with GIAB benchmark INFO, matched by position, REF and ALT.
+    locus = load_locus(DATA / "pacbio.HG002.vcf.gz", FASTA, DATA / "gencode.v46.gtf", "ENST00000371998.8",
+                       info_fields=("platforms", "datasets"), info_from=DATA / "giab.HG002.vcf.gz")
+    assert locus.variants[0].info == {"platforms": "3", "datasets": "5"}
+    out = tmp_path / "ncoa3.html"
+    assert main(["report", "--vcf", str(DATA / "pacbio.HG002.vcf.gz"), "--fasta", str(FASTA), "--annotation", str(DATA / "gencode.v46.gtf"),
+                 "--gene", "NCOA3", "--info", "platforms", "--info-from", str(DATA / "giab.HG002.vcf.gz"), "--out", str(out)]) == 0
+    assert '"info":{"platforms":"3"}' in out.read_text()

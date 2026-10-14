@@ -299,6 +299,40 @@ def _apply_phase(variants: list[Variant], phased: dict[tuple[int, str], tuple[tu
     return result
 
 
+def _format_info(value: object) -> str:
+    if value is True:
+        return "yes"
+    if isinstance(value, float):
+        return f"{value:.4g}"
+    return str(value).replace("_", " ") if isinstance(value, str) else str(value)
+
+
+def _info_for(record: object, fields: tuple[str, ...], alts: list[str]) -> dict[str, str]:
+    """Requested INFO values for the given alternate alleles of a record.
+
+    Number=A and Number=R fields are taken per allele; other fields whole.
+    """
+    result = {}
+    record_alts = [(alt or "").upper() for alt in (record.alts or ())]
+    for name in fields:
+        if name not in record.info:
+            continue
+        value = record.info[name]
+        number = record.header.info[name].number if name in record.header.info else "."
+        if number in ("A", "R") and isinstance(value, tuple):
+            offset = 1 if number == "R" else 0
+            picked = [value[record_alts.index(alt) + offset] for alt in alts if alt in record_alts and record_alts.index(alt) + offset < len(value)]
+            if not picked:
+                continue
+            text = "/".join(_format_info(item) for item in picked)
+        elif isinstance(value, tuple):
+            text = ",".join(_format_info(item) for item in value)
+        else:
+            text = _format_info(value)
+        result[name] = text
+    return result
+
+
 def _open_variants(path: str | Path, what: str) -> pysam.VariantFile:
     try:
         return pysam.VariantFile(str(path))
@@ -320,7 +354,8 @@ class LocusReader:
     """
 
     def __init__(self, vcf_path: str | Path, fasta_path: str | Path, sample: str | None = None,
-                 min_gq: float = 20, min_dp: int = 5, phase_from: str | Path | None = None):
+                 min_gq: float = 20, min_dp: int = 5, phase_from: str | Path | None = None,
+                 info_fields: tuple[str, ...] = (), info_from: str | Path | None = None):
         check_thresholds(min_gq, min_dp)
         self.vcf_path, self.min_gq, self.min_dp = Path(vcf_path), min_gq, min_dp
         if not Path(str(fasta_path) + ".fai").is_file():
@@ -352,9 +387,24 @@ class LocusReader:
                 raise PhaseSpaceError(f"Sample {sample!r} is absent from the phase file, which has {len(phase_samples)} samples.")
             self.phase_label = f"{Path(phase_from).name} (sample {self.phase_sample})"
             self.source += f" + phase from {Path(phase_from).name}"
+        self.info_fields = tuple(info_fields)
+        self.info = None
+        if info_from is not None and not self.info_fields:
+            self.close()
+            raise PhaseSpaceError("--info-from needs --info to name the fields to show.")
+        if self.info_fields:
+            self.info = _open_variants(info_from, "annotation VCF") if info_from is not None else None
+            header = (self.info or self.vcf).header
+            missing = [name for name in self.info_fields if name not in header.info]
+            if missing:
+                available = ", ".join(sorted(header.info)[:20])
+                self.close()
+                raise PhaseSpaceError(f"INFO field{'s' if len(missing) > 1 else ''} {', '.join(missing)} not defined in the {'annotation VCF' if info_from else 'VCF'} header. Available: {available}.")
+            if info_from is not None:
+                self.source += f" + INFO from {Path(info_from).name}"
 
     def close(self) -> None:
-        for handle in (getattr(self, "fasta", None), getattr(self, "vcf", None), getattr(self, "phase", None)):
+        for handle in (getattr(self, "fasta", None), getattr(self, "vcf", None), getattr(self, "phase", None), getattr(self, "info", None)):
             if handle is not None:
                 handle.close()
 
@@ -370,6 +420,27 @@ class LocusReader:
         except (ValueError, OSError):
             warnings.append("Input has no usable regional index; streamed records. BGZF VCF with a tabix/CSI index or indexed BCF enables regional loading.")
             return iter(_open_variants(self.vcf_path, "VCF/gVCF/BCF"))
+
+    def _external_info(self, variants: list[Variant], contig: str) -> list[Variant]:
+        """Annotate calls from a separate VCF (e.g. ClinVar), matched by position, REF and ALT."""
+        if self.info.header.contigs:
+            contig = _resolve_contig(contig, self.info.header.contigs)
+            if contig is None:
+                return variants
+        annotated = []
+        for variant in variants:
+            alts = sorted(set(variant.alleles) - {variant.ref})
+            info: dict[str, str] = {}
+            try:
+                records = list(self.info.fetch(contig, variant.pos, variant.pos + len(variant.ref)))
+            except (ValueError, OSError) as exc:
+                raise PhaseSpaceError(f"The annotation VCF needs a tabix/CSI index for regional lookup: {exc}") from exc
+            for record in records:
+                if record.start == variant.pos and (record.ref or "").upper() == variant.ref:
+                    for name, value in _info_for(record, self.info_fields, alts).items():
+                        info.setdefault(name, value)
+            annotated.append(replace(variant, info=info))
+        return annotated
 
     def load(self, model: TranscriptModel) -> Locus:
         """Load supported calls and explicit evidence for one annotated transcript."""
@@ -497,13 +568,16 @@ class LocusReader:
                 phase_set = str(ps) if call.phased and ps is not None else None
                 # Name the call by its alternate alleles, independent of genotype order.
                 variant_id = f"{location}:{ref}>{','.join(sorted(set(alleles) - {ref}))}"
+                info = _info_for(record, self.info_fields, sorted(set(alleles) - {ref})) if self.info_fields and self.info is None else {}
                 variants.append(Variant(variant_id, start, ref, alleles, tuple(gt), call.phased, phase_set,
-                                        cds_start, cds_end, cds_ref, cds_alleles, gq, dp))
+                                        cds_start, cds_end, cds_ref, cds_alleles, gq, dp, info))
                 raw_evidence.extend(Evidence(left, right, "variant", "Passing variant genotype.") for left, right in clips)
         except (ValueError, OSError) as exc:
             if isinstance(exc, PhaseSpaceError):
                 raise
             raise PhaseSpaceError(f"Cannot interpret variant records: {exc}") from exc
+        if self.info is not None and variants:
+            variants = self._external_info(variants, vcf_contig)
         if self.phase is not None:
             phased = _phased_calls(self.phase, self.phase_path, self.phase_sample, vcf_contig, (intervals[0][0], intervals[-1][1]))
             variants = _apply_phase(variants, phased, self.phase_label, warnings)
@@ -519,12 +593,13 @@ class LocusReader:
 
 def load_locus(vcf_path: str | Path, fasta_path: str | Path, annotation_path: str | Path,
                transcript_id: str, sample: str | None = None, min_gq: float = 20,
-               min_dp: int = 5, phase_from: str | Path | None = None) -> Locus:
+               min_dp: int = 5, phase_from: str | Path | None = None,
+               info_fields: tuple[str, ...] = (), info_from: str | Path | None = None) -> Locus:
     """Load supported calls and explicit evidence for one annotated transcript.
 
     See ``LocusReader`` for how calls, evidence, phase and contig names are handled.
     """
     check_thresholds(min_gq, min_dp)
     model = read_transcript(Path(annotation_path), transcript_id)
-    with LocusReader(vcf_path, fasta_path, sample, min_gq, min_dp, phase_from) as reader:
+    with LocusReader(vcf_path, fasta_path, sample, min_gq, min_dp, phase_from, info_fields, info_from) as reader:
         return reader.load(model)

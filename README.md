@@ -48,6 +48,10 @@ Deletions in gVCFs are handled whichever way the writer records the deleted base
 
 Use `--gene SYMBOL` (or a gene ID) instead of `--transcript`. PhaseSpace picks the gene's MANE Select transcript, then its Ensembl canonical transcript, then its RefSeq Select transcript, and says which it chose. If none is tagged, it lists the transcripts so you can pick one with `--transcript`.
 
+### Show annotations you already have
+
+`--info CLNSIG,AF` shows those INFO fields for each variant in reports and scans. By default they come from the main VCF. `--info-from clinvar.vcf.gz` reads them from a separate indexed VCF, such as ClinVar or gnomAD sites, matching calls by position, REF and ALT. Contig names may differ by a `chr` prefix. Per-allele fields (`Number=A` or `R`) are taken for the called alternate alleles. Nothing is looked up online.
+
 ### Scan every gene
 
 ```bash

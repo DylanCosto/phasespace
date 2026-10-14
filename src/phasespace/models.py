@@ -27,6 +27,8 @@ class Variant:
     cds_alleles: tuple[str, str]
     gq: float | None = None
     dp: int | None = None
+    # Requested INFO annotations for this call's alternate alleles, as text.
+    info: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

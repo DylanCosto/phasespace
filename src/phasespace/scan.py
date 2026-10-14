@@ -26,7 +26,7 @@ from .report import _script_json, write_report
 
 TIERS = {1: "Phase decides", 2: "No reference protein, disruptive", 3: "No reference protein", 4: "Reference protein kept"}
 COLUMNS = ["tier", "gene", "transcript", "selection", "contig", "verdict", "variants", "heterozygous", "phased",
-           "blocks", "arrangements", "protein_outcomes", "changes", "disruptive", "splice_region", "unknown_cds_bases",
+           "blocks", "arrangements", "protein_outcomes", "changes", "disruptive", "splice_region", "info", "unknown_cds_bases",
            "cds_bases", "status", "report"]
 
 _worker: dict = {}
@@ -35,7 +35,7 @@ _worker: dict = {}
 def _start_worker(settings: dict) -> None:
     _worker["settings"] = settings
     _worker["reader"] = LocusReader(settings["vcf"], settings["fasta"], settings["sample"], settings["min_gq"],
-                                    settings["min_dp"], settings["phase_from"])
+                                    settings["min_dp"], settings["phase_from"], settings["info_fields"], settings["info_from"])
 
 
 def _safe(name: str) -> str:
@@ -55,7 +55,8 @@ def _scan_one(model: TranscriptModel) -> dict:
                heterozygous=sum(v.gt[0] != v.gt[1] for v in variants),
                phased=sum(v.phased and v.gt[0] != v.gt[1] for v in variants),
                unknown_cds_bases=sum(e.end - e.start for e in locus.evidence if e.status == "unknown"),
-               splice_region=len(locus.splice_region))
+               splice_region=len(locus.splice_region),
+               info="; ".join(f"{v.id.split(':', 1)[1]} {k}={value}" for v in variants for k, value in v.info.items()))
     if not variants:
         return {**row, "tier": 4, "verdict": "good", "status": "no called coding variants"}
     try:
@@ -76,7 +77,8 @@ def _scan_one(model: TranscriptModel) -> dict:
 
 
 def run_scan(vcf: str, fasta: str, annotation: str, out_dir: str | Path, *, sample: str | None = None,
-             genes: set[str] | None = None, phase_from: str | None = None, min_gq: float = 20, min_dp: int = 5,
+             genes: set[str] | None = None, phase_from: str | None = None, info_fields: tuple[str, ...] = (),
+             info_from: str | None = None, min_gq: float = 20, min_dp: int = 5,
              max_blocks: int = 8, reports: str = "candidates", threads: int = 1, log=None) -> dict:
     check_thresholds(min_gq, min_dp)
     check_max_blocks(max_blocks)
@@ -92,9 +94,9 @@ def run_scan(vcf: str, fasta: str, annotation: str, out_dir: str | Path, *, samp
     if not models:
         raise PhaseSpaceError("No supported coding transcripts were found to scan.")
     settings = {"vcf": str(vcf), "fasta": str(fasta), "sample": sample, "min_gq": min_gq, "min_dp": min_dp,
-                "phase_from": phase_from, "max_blocks": max_blocks, "reports": reports, "out_dir": str(out_dir)}
+                "phase_from": phase_from, "info_fields": tuple(info_fields), "info_from": info_from, "max_blocks": max_blocks, "reports": reports, "out_dir": str(out_dir)}
     # Fail fast on unreadable inputs or an ambiguous sample before starting workers.
-    with LocusReader(vcf, fasta, sample, min_gq, min_dp, phase_from) as probe:
+    with LocusReader(vcf, fasta, sample, min_gq, min_dp, phase_from, info_fields, info_from) as probe:
         settings["sample"] = sample = probe.sample
         source = probe.source
         references = set(probe.fasta.references)

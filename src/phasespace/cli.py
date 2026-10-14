@@ -19,6 +19,8 @@ def _inputs(command: argparse.ArgumentParser) -> None:
     command.add_argument("--min-dp", type=int, default=5, help="Minimum depth, using MIN_DP for blocks when present (default: 5)")
     command.add_argument("--phase-from", metavar="PHASED_VCF", help="Phased VCF/BCF (e.g. from WhatsHap or longphase) that supplies GT order and PS for heterozygous calls; the main input still supplies evidence")
     command.add_argument("--max-blocks", type=int, default=8, help="Hard cap on independent heterozygous phase blocks, 0–12 (default: 8)")
+    command.add_argument("--info", metavar="FIELDS", help="Comma-separated INFO fields to show for each variant (e.g. CLNSIG,AF)")
+    command.add_argument("--info-from", metavar="ANNOTATED_VCF", help="Indexed VCF (e.g. ClinVar or gnomAD sites) to read --info fields from, matched by position, REF and ALT; default: the main VCF")
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -61,8 +63,12 @@ def _gene_list(value: str | None) -> set[str] | None:
     return genes
 
 
+def _fields(value: str | None) -> tuple[str, ...]:
+    return tuple(name.strip() for name in (value or "").split(",") if name.strip())
+
+
 def _check_not_inputs(args: argparse.Namespace, outputs: list[Path]) -> None:
-    sources = [p for p in (args.vcf, args.fasta, args.annotation, args.phase_from) if p is not None]
+    sources = [p for p in (args.vcf, args.fasta, args.annotation, args.phase_from, args.info_from) if p is not None]
     inputs = {Path(p).resolve() for p in sources}
     inputs.update(Path(str(p) + suffix).resolve() for p in sources for suffix in (".fai", ".gzi", ".tbi", ".csi"))
     if any(path.resolve() in inputs for path in outputs):
@@ -82,7 +88,8 @@ def _scan(args: argparse.Namespace) -> int:
     if threads < 1:
         raise PhaseSpaceError("--threads must be at least 1.")
     result = run_scan(args.vcf, args.fasta, args.annotation, args.out_dir, sample=args.sample, genes=_gene_list(args.genes),
-                      phase_from=args.phase_from, min_gq=args.min_gq, min_dp=args.min_dp, max_blocks=args.max_blocks,
+                      phase_from=args.phase_from, info_fields=_fields(args.info), info_from=args.info_from,
+                      min_gq=args.min_gq, min_dp=args.min_dp, max_blocks=args.max_blocks,
                       reports=args.reports, threads=threads)
     counts = result["counts"]
     print(f"PhaseSpace scan: {counts['transcripts_scanned']:,} transcripts, {counts['with_coding_variants']:,} with coding variants")
@@ -124,7 +131,8 @@ def main(argv: list[str] | None = None) -> int:
             if args.gene:
                 from .annotation import select_transcript
                 transcript, selection = select_transcript(Path(args.annotation), args.gene)
-            locus = load_locus(args.vcf, args.fasta, args.annotation, transcript, sample=args.sample, min_gq=args.min_gq, min_dp=args.min_dp, phase_from=args.phase_from)
+            locus = load_locus(args.vcf, args.fasta, args.annotation, transcript, sample=args.sample, min_gq=args.min_gq, min_dp=args.min_dp,
+                               phase_from=args.phase_from, info_fields=_fields(args.info), info_from=args.info_from)
             if selection:
                 locus.warnings.insert(0, selection)
             result = analyze(locus, max_blocks=args.max_blocks)

@@ -180,6 +180,8 @@
   const scenarios = data.scenarios || [];
   const variants = data.variants || [];
   const spliceRegion = data.splice_region || [];
+  const infoText = function (variant) { return Object.keys(variant.info || {}).map(function (key) { return key + "=" + variant.info[key]; }).join("  ·  "); };
+  const hasInfo = variants.some(function (variant) { return Object.keys(variant.info || {}).length > 0; });
   const spliceIds = new Set(spliceRegion.map(function (hit) { return hit.id; }));
   const proteinScale = sharedProteinScale(scenarios, data.reference_protein_length);
   const variantLookup = new Map(variants.map(function (variant) { return [variant.id, variant]; }));
@@ -464,7 +466,7 @@
       const center = pct((variant.cds_start + Math.max(variant.cds_end, variant.cds_start + 1)) / 2);
       const pin = element("span", "pin");
       pin.style.left = center + "%";
-      const labelNode = tip(element("span", "pin-label" + (spliceIds.has(variant.id) ? " splice" : ""), name), name + "\n" + variant.id + "\nGT " + variant.gt.join(variant.phased ? "|" : "/") + (variant.block ? " · " + blockName(variant.block) : " · on both copies") + (spliceIds.has(variant.id) ? "\nSplice region: effect on splicing not modelled" : ""));
+      const labelNode = tip(element("span", "pin-label" + (spliceIds.has(variant.id) ? " splice" : ""), name), name + "\n" + variant.id + "\nGT " + variant.gt.join(variant.phased ? "|" : "/") + (variant.block ? " · " + blockName(variant.block) : " · on both copies") + (spliceIds.has(variant.id) ? "\nSplice region: effect on splicing not modelled" : "") + (infoText(variant) ? "\n" + infoText(variant) : ""));
       pin.append(labelNode, element("span", "pin-stem"));
       pins.append(pin);
       const head = element("span", "pin-head");
@@ -672,6 +674,7 @@
 
   function renderVariants() {
     text("variant-count", plural(variants.length, "called coding variant"));
+    byId("info-head").hidden = !hasInfo;
     const tbody = byId("variants-body");
     if (!variants.length) {
       const row = element("tr");
@@ -686,6 +689,7 @@
         [variant.gq == null ? "—" : number(variant.gq), "num"], [variant.dp == null ? "—" : number(variant.dp), "num"]].forEach(function (cell) {
         row.append(element("td", cell[1], cell[0]));
       });
+      if (hasInfo) row.append(element("td", "info-cell", infoText(variant) || "—"));
       tbody.append(row);
     });
   }
