@@ -32,15 +32,27 @@
         <h1><span id="gene-title">PhaseSpace report</span><span id="transcript-id" class="transcript-id"></span></h1>
         <p id="locus-meta" class="locus-meta"></p>
       </div>
-      <div id="verdict" class="verdict" aria-live="polite" aria-atomic="true">
-        <div class="verdict-icon" aria-hidden="true"></div>
-        <div><p class="verdict-kicker">Across compatible arrangements</p><p id="verdict-title" class="verdict-title"></p><p id="verdict-detail" class="verdict-detail"></p></div>
+      <div class="answer">
+        <div id="verdict" class="verdict" aria-live="polite" aria-atomic="true">
+          <div class="verdict-icon" aria-hidden="true"></div>
+          <div>
+            <p id="verdict-kicker" class="verdict-kicker">From the calls alone</p>
+            <p id="verdict-title" class="verdict-title"></p>
+            <p id="verdict-detail" class="verdict-detail"></p>
+            <ul id="verdict-caveats" class="caveats"></ul>
+          </div>
+        </div>
+        <section id="evidence-summary-panel" class="evidence-rows" aria-labelledby="evidence-rows-heading">
+          <h2 id="evidence-rows-heading" class="evidence-rows-title">Phase evidence <span class="tag tag-observed">observed</span></h2>
+          <div id="evidence-rows"></div>
+          <p id="evidence-agreement" class="evidence-agreement" hidden></p>
+        </section>
       </div>
       <dl class="stats">
         <div class="stat"><dt>Arrangements</dt><dd id="total-arrangements">—</dd><p class="stat-note" id="arrangements-note"></p></div>
-        <div class="stat"><dt>Coding outcomes</dt><dd id="total-outcomes">—</dd><p class="stat-note">distinct pairs of CDS sequences</p></div>
-        <div class="stat" id="protein-summary" hidden><dt>Protein outcomes</dt><dd id="total-protein-outcomes">—</dd><p class="stat-note">distinct predicted products</p></div>
-        <div class="stat"><dt>CDS with called evidence</dt><dd id="coverage-stat">—</dd><div class="stat-meter" aria-hidden="true"><span id="coverage-meter"></span></div></div>
+        <div class="stat" id="protein-summary"><dt>Protein outcomes</dt><dd id="total-protein-outcomes">—</dd><p class="stat-note" id="protein-note">different protein pairs across arrangements</p></div>
+        <div class="stat"><dt>Called coding variants</dt><dd id="variant-stat">—</dd><p class="stat-note" id="variant-note"></p></div>
+        <div class="stat"><dt>Coding bases with a call</dt><dd id="coverage-stat">—</dd><div class="stat-meter" aria-hidden="true"><span id="coverage-meter"></span></div></div>
       </dl>
     </section>
 
@@ -101,22 +113,6 @@
         <p id="constraint-help" class="help">For two single 0/1 variants, same orientation means both alternate alleles sit on one copy (cis); opposite means they sit on different copies (trans).</p>
         <div class="active-head"><h3>Active <span id="constraint-count" class="count">0</span></h3><button id="reset-constraints" class="btn-text" type="button">Reset all</button></div>
         <ul id="active-constraints" class="constraint-list"></ul>
-        <div id="reads-section" class="reads-section" hidden>
-          <h3>Read evidence <span class="tag tag-observed">observed</span></h3>
-          <p class="help">Reads covering two blocks show which alleles travel together on one copy. These are counts, not probabilities.</p>
-          <div id="read-pairs" class="read-pairs"></div>
-          <p id="read-within" class="help"></p>
-          <button id="apply-reads" class="btn btn-block" type="button">Apply read-supported relationships</button>
-          <p id="read-rule" class="help"></p>
-        </div>
-        <div id="parents-section" class="reads-section" hidden>
-          <h3>Inheritance evidence <span class="tag tag-observed">observed</span></h3>
-          <p class="help">Which parent passed on each allele, from the parents' genotypes. Calls inherited from the same parent sit on one copy.</p>
-          <div id="parent-pairs" class="read-pairs"></div>
-          <p id="parent-within" class="help"></p>
-          <button id="apply-parents" class="btn btn-block" type="button">Apply inherited relationships</button>
-          <p id="parent-rule" class="help"></p>
-        </div>
         <div id="informative-section" class="informative" hidden>
           <h3>Most informative relationships</h3>
           <p class="help">Knowing these would separate the most predicted protein outcomes. This is not a probability.</p>
@@ -127,10 +123,10 @@
       <section class="card outcomes" aria-labelledby="outcomes-heading">
         <header class="card-head">
           <div>
-            <h2 id="outcomes-heading">Coding outcomes</h2>
+            <h2 id="outcomes-heading">Protein outcomes</h2>
             <p id="result-explanation" class="card-sub" aria-live="polite"></p>
           </div>
-          <div class="mini-stats"><span><strong id="compatible-count">—</strong> compatible arrangements</span><span><strong id="outcome-count">—</strong> outcomes</span></div>
+          <div class="mini-stats"><span><strong id="compatible-count">—</strong> compatible arrangements</span><span><strong id="outcome-count">—</strong> protein outcomes</span></div>
         </header>
         <div id="outcome-options" class="outcome-grid"></div>
         <button id="show-all-outcomes" class="btn btn-quiet show-all" type="button" hidden></button>

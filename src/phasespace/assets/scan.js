@@ -8,16 +8,15 @@
     inframe_insertion: "In-frame insertion", inframe_deletion: "In-frame deletion", frame_restored: "Frame restored", uncertain_codon: "Uncertain codon" };
   const TIER_NAMES = Object.assign({}, data.tiers, { 5: "Not analysed" });
   const COLUMNS = [
-    { key: "tier", label: "Tier" }, { key: "gene", label: "Gene" }, { key: "transcript", label: "Transcript" },
-    { key: "heterozygous", label: "Het", numeric: true }, { key: "variants", label: "Variants", numeric: true },
-    { key: "arrangements", label: "Arrangements", numeric: true }, { key: "protein_outcomes", label: "Protein outcomes", numeric: true },
-    { key: "changes", label: "Changes" }, { key: "unknown_cds_bases", label: "Unknown bases", numeric: true }
+    { key: "tier", label: "Tier" }, { key: "gene", label: "Gene" }, { key: "protein_changes", label: "Protein changes" },
+    { key: "heterozygous", label: "Calls", numeric: true }, { key: "arrangements", label: "Arrangements", numeric: true },
+    { key: "unknown_cds_bases", label: "No call", numeric: true }
   ];
   const state = { tier: "all", query: "", sort: { key: "tier", dir: 1 }, limit: 300 };
   const rows = data.rows || [];
   const VERDICTS = { good: "Reference protein kept", none: "No reference protein", mixed: "Phase still decides", conflicting: "Reads conflict" };
-  if (rows.some(function (row) { return row.verdict_with_reads; })) COLUMNS.splice(7, 0, { key: "verdict_with_reads", label: "With reads" });
-  if (rows.some(function (row) { return row.verdict_with_parents; })) COLUMNS.splice(7, 0, { key: "verdict_with_parents", label: "With parents" });
+  if (rows.some(function (row) { return row.verdict_with_reads; })) COLUMNS.splice(3, 0, { key: "verdict_with_reads", label: "With reads" });
+  if (rows.some(function (row) { return row.verdict_with_parents; })) COLUMNS.splice(3, 0, { key: "verdict_with_parents", label: "With parents" });
 
   function element(tag, className, content) {
     const node = document.createElement(tag);
@@ -101,41 +100,40 @@
     body.replaceChildren();
     visible.slice(0, state.limit).forEach(function (row) {
       const tr = element("tr");
-      const tier = element("td");
-      tier.append(element("span", "tier-badge tier-" + row.tier, TIER_NAMES[row.tier]));
-      const gene = element("td", "gene");
-      if (row.report) { const link = element("a", "", row.gene); link.href = row.report; gene.append(link); } else gene.textContent = row.gene;
-      const changes = element("td");
-      if (row.tier === 5) changes.append(element("span", "status-note", row.status));
+      const cells = {};
+      cells.tier = element("td");
+      cells.tier.append(element("span", "tier-badge tier-" + row.tier, TIER_NAMES[row.tier]));
+      cells.gene = element("td", "gene");
+      const name = row.report ? element("a", "", row.gene) : element("span", "gene-name", row.gene);
+      if (row.report) name.href = row.report;
+      cells.gene.append(name, element("span", "transcript", row.transcript));
+      cells.protein_changes = element("td");
+      if (row.tier === 5) cells.protein_changes.append(element("span", "status-note", row.status));
       else {
         const pills = element("div", "change-pills");
-        const disruptive = (row.disruptive || "").split(",");
-        (row.changes || "").split(",").filter(Boolean).forEach(function (key) { pills.append(element("span", disruptive.indexOf(key) >= 0 ? "disruptive" : "", LABELS[key] || key)); });
+        const changes = (row.protein_changes || "").split("; ").filter(Boolean);
+        changes.slice(0, 4).forEach(function (change) { pills.append(element("span", "pchange", change)); });
+        if (changes.length > 4) { const more = element("span", "more", "+" + (changes.length - 4)); more.title = changes.slice(4).join("\n"); pills.append(more); }
+        const disruptive = (row.disruptive || "").split(",").filter(Boolean);
+        disruptive.forEach(function (key) { pills.append(element("span", "disruptive", LABELS[key] || key)); });
         if (Number(row.splice_region)) pills.append(element("span", "splice", "Splice region ×" + row.splice_region));
-        if (row.protein_changes) {
-          const list = row.protein_changes.split("; ");
-          const chip = element("span", "pchanges", list.slice(0, 3).join(", ") + (list.length > 3 ? " +" + (list.length - 3) : ""));
-          chip.title = list.join("\n");
-          pills.append(chip);
-        }
-        if (!pills.children.length) pills.append(element("span", "", "Synonymous only"));
-        changes.append(pills);
+        if (!changes.length && !disruptive.length) pills.append(element("span", "", row.changes ? "Synonymous only" : "No protein change"));
+        cells.protein_changes.append(pills);
       }
-      const cell = function (value, className) { return element("td", className, value === undefined || value === "" ? "—" : value); };
-      tr.append(tier, gene, cell(row.transcript, "mono"), cell(row.heterozygous, "num"), cell(row.variants, "num"), cell(row.arrangements === undefined ? "" : number(row.arrangements), "num"),
-        cell(row.protein_outcomes, "num"));
       [["verdict_with_parents", function () { return row.parent_supported_relationships + " inherited relationship(s); " + row.mendelian_conflicts + " Mendelian conflict(s)"; }],
        ["verdict_with_reads", function () { return row.read_supported_relationships + " read-supported relationship(s) from " + row.read_fragments + " informative fragments"; }]].forEach(function (spec) {
-        if (!COLUMNS.some(function (column) { return column.key === spec[0]; })) return;
-        const cellNode = element("td");
+        const cell = element("td");
         const value = row[spec[0]];
         if (value) {
-          cellNode.append(element("span", "tier-badge tier-" + ({ good: 4, none: 3, mixed: 1, conflicting: 5 }[value]), VERDICTS[value]));
-          cellNode.title = spec[1]();
-        } else cellNode.textContent = "—";
-        tr.append(cellNode);
+          cell.append(element("span", "tier-badge tier-" + ({ good: 4, none: 3, mixed: 1, conflicting: 5 }[value]), VERDICTS[value]));
+          cell.title = spec[1]();
+        } else cell.textContent = "—";
+        cells[spec[0]] = cell;
       });
-      tr.append(changes, cell(row.unknown_cds_bases, "num"));
+      cells.heterozygous = element("td", "num", row.variants === undefined || row.variants === "" ? "—" : row.variants + (row.heterozygous ? " · " + row.heterozygous + " het" : ""));
+      cells.arrangements = element("td", "num", row.arrangements === undefined || row.arrangements === "" ? "—" : number(row.arrangements));
+      cells.unknown_cds_bases = element("td", "num", row.unknown_cds_bases === undefined || row.unknown_cds_bases === "" ? "—" : number(row.unknown_cds_bases));
+      COLUMNS.forEach(function (column) { tr.append(cells[column.key]); });
       body.append(tr);
     });
     byId("scan-empty").hidden = visible.length > 0;

@@ -112,7 +112,7 @@ The image (see `Dockerfile`) is published to GitHub Container Registry for each 
 - HGVS-style protein changes for each copy (`p.Gln8Ter`, `p.Val7_Leu8del`, `p.Lys2AsnfsTer2`), derived from the copy's jointly edited sequence. Two calls in one codon give the amino acid actually made. On HG002, SIRPA's c.298A>G (alone p.Asn100Asp) and c.300C>A (alone p.Asn100Lys) sit on one copy and give p.Asn100Glu. Substitutions follow HGVS exactly; indels are trimmed but not shifted 3′ across repeats outside the changed stretch.
 - Reference-call support, called-variant evidence, and unknown intervals across the annotated CDS.
 - Hypothetical block-orientation constraints and informative block-pair comparisons.
-- A verdict on whether any arrangement keeps a copy with the reference protein sequence, and whether that depends on phase. Synonymous changes alter the CDS but not this verdict.
+- An answer card at the top: whether any arrangement keeps a copy with the reference protein, and whether that depends on phase. Synonymous changes alter the CDS but not this verdict. Beside it, one row per evidence source (reads, inheritance) gives the answer that source supports, with an Apply button and expandable per-block counts. When both sources are present, the card says whether they agree.
 - Both gene copies side by side, with each copy's alternate alleles, its predicted protein length on a shared scale, and the first stop.
 - Per-block flip controls that move a block's alleles to the other copy.
 - A local JSON export with the analyzed sequences, calls, evidence, and scenarios.

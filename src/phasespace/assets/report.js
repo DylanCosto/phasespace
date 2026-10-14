@@ -27,6 +27,36 @@
     return Array.from(groups.values());
   }
 
+  /** Add a relationship; one already present with the same direction gains the
+   *  new source, and one with the opposite direction is replaced. Returns a new list. */
+  function mergeConstraint(constraints, constraint) {
+    const same = function (c) { return (c.a === constraint.a && c.b === constraint.b) || (c.a === constraint.b && c.b === constraint.a); };
+    const existing = constraints.find(same);
+    if (!existing) return constraints.concat([{ a: constraint.a, b: constraint.b, parity: constraint.parity, sources: constraint.sources.slice() }]);
+    return constraints.map(function (c) {
+      if (!same(c)) return c;
+      if (c.parity !== constraint.parity) return { a: constraint.a, b: constraint.b, parity: constraint.parity, sources: constraint.sources.slice() };
+      return { a: c.a, b: c.b, parity: c.parity, sources: c.sources.concat(constraint.sources.filter(function (s) { return c.sources.indexOf(s) < 0; })) };
+    });
+  }
+
+  /** Withdraw one source; relationships nothing else supports are dropped. Returns a new list. */
+  function withdrawSource(constraints, source) {
+    return constraints.map(function (c) { return { a: c.a, b: c.b, parity: c.parity, sources: c.sources.filter(function (s) { return s !== source; }) }; })
+      .filter(function (c) { return c.sources.length; });
+  }
+
+  /** Arrangements grouped by their pair of predicted proteins, in first-seen order. */
+  function groupByProtein(scenarios) {
+    const groups = new Map();
+    scenarios.forEach(function (scenario) {
+      const key = scenario.protein_outcome_key || scenario.outcome_key;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(scenario);
+    });
+    return Array.from(groups.values());
+  }
+
   function sharedProteinScale(scenarios, referenceLength) {
     return scenarios.reduce(function (longest, scenario) {
       return scenario.haplotypes.reduce(function (length, haplotype) {
@@ -165,7 +195,8 @@
   // Export the exact report logic for independent tests.
   if (typeof module !== "undefined" && module.exports) {
     module.exports = {
-      filterScenarios: filterScenarios, groupScenarios: groupScenarios, sharedProteinScale: sharedProteinScale,
+      filterScenarios: filterScenarios, groupScenarios: groupScenarios, groupByProtein: groupByProtein, sharedProteinScale: sharedProteinScale,
+      mergeConstraint: mergeConstraint, withdrawSource: withdrawSource,
       translate: translate, rebuildCds: rebuildCds, expandAnalysis: expandAnalysis, phaseVerdict: phaseVerdict,
       flipTarget: flipTarget, changeLabel: changeLabel, placeLabels: placeLabels
     };
@@ -200,7 +231,8 @@
   const variantLookup = new Map(variants.map(function (variant) { return [variant.id, variant]; }));
   const blockLookup = new Map(blocks.map(function (block) { return [block.id, block]; }));
   const scenarioNumber = new Map(scenarios.map(function (scenario, index) { return [scenario.id, index + 1]; }));
-  const outcomeNumber = new Map(groupScenarios(scenarios).map(function (group, index) { return [group[0].outcome_key, index + 1]; }));
+  const proteinKey = function (scenario) { return scenario.protein_outcome_key || scenario.outcome_key; };
+  const outcomeNumber = new Map(groupByProtein(scenarios).map(function (group, index) { return [proteinKey(group[0]), index + 1]; }));
   const sequenceCache = new Map();
   const state = { constraints: [], selectedId: scenarios.length ? scenarios[0].id : null, compatible: [], showAllOutcomes: false };
   const OUTCOME_PREVIEW = 24;
@@ -317,17 +349,18 @@
     const start = Math.min.apply(null, exons.map(function (exon) { return exon.left; }));
     const end = Math.max.apply(null, exons.map(function (exon) { return exon.right; }));
     [transcript.contig + ":" + number(start + 1) + "–" + number(end), (transcript.strand === "-" ? "Reverse" : "Forward") + " strand",
-      number(reference.length) + " coding bases", plural(exons.length, "coding exon"), plural(variants.length, "called variant")].forEach(function (value) {
+      number(reference.length) + " coding bases", plural(exons.length, "coding exon")].forEach(function (value) {
       meta.append(element("span", "", value));
     });
     byId("synthetic-label").hidden = data.synthetic !== true;
     text("total-arrangements", number(scenarios.length));
-    text("arrangements-note", blocks.length ? plural(blocks.length, "independent phase block") : "no heterozygous phase blocks");
-    text("total-outcomes", number(outcomeNumber.size));
-    if (Number.isInteger(data.protein_outcome_count)) {
-      byId("protein-summary").hidden = false;
-      text("total-protein-outcomes", number(data.protein_outcome_count));
-    }
+    text("arrangements-note", blocks.length > 1 ? "ways to place " + number(blocks.length) + " independent blocks on two copies" : blocks.length ? "one block, so its phase is fixed" : "no heterozygous calls to place");
+    text("total-protein-outcomes", number(outcomeNumber.size));
+    const codingOutcomes = new Set(scenarios.map(function (scenario) { return scenario.outcome_key; })).size;
+    text("protein-note", codingOutcomes > outcomeNumber.size ? "protein pairs; " + number(codingOutcomes) + " if synonymous differences count" : "different protein pairs across arrangements");
+    const heterozygous = variants.filter(function (variant) { return variant.gt[0] !== variant.gt[1]; }).length;
+    text("variant-stat", number(variants.length));
+    text("variant-note", number(heterozygous) + " heterozygous · " + number(variants.length - heterozygous) + " on both copies");
     const called = evidence.counts.reference + evidence.counts.variant;
     const share = evidence.total ? Math.round(100 * called / evidence.total) : 0;
     text("coverage-stat", share + "%");
@@ -346,40 +379,158 @@
     const verdict = phaseVerdict(state.compatible, reference);
     const box = byId("verdict");
     box.dataset.tone = verdict.tone;
-    const iconBox = box.querySelector(".verdict-icon");
-    iconBox.replaceChildren(icon(verdict.tone === "good" ? ICONS.check : verdict.tone === "mixed" ? ICONS.split : ICONS.alert));
+    box.querySelector(".verdict-icon").replaceChildren(icon(verdict.tone === "good" ? ICONS.check : verdict.tone === "mixed" ? ICONS.split : ICONS.alert));
+    const sources = Array.from(new Set([].concat.apply([], state.constraints.map(function (c) { return c.sources; }))));
+    const linkedBy = Array.from(new Set([].concat.apply([], (data.linked_blocks || []).map(function (group) { return group.sources; }))));
+    const base = linkedBy.length ? "With blocks linked by " + linkedBy.map(function (source) { return source === "parents" ? "inheritance" : source; }).join(" and ") : "From the calls alone";
+    text("verdict-kicker", !sources.length ? base : "With " + sources.map(function (source) {
+      return { reads: "read evidence", parents: "inheritance", hypothesis: "your hypotheses" }[source];
+    }).join(" and ") + " applied");
     let title, detail;
     if (verdict.tone === "empty") {
-      title = "No arrangement fits the applied hypotheses";
-      detail = "Remove or reset a hypothesis to see supported arrangements again.";
+      title = "No arrangement fits the applied relationships";
+      detail = "They contradict each other. Remove one or reset to see supported arrangements again.";
     } else if (verdict.tone === "good" && verdict.min === 2) {
       title = "Both copies keep the reference protein sequence";
-      detail = verdict.cdsChanged ? "The included calls change the coding sequence only synonymously, whatever the phase." : "No included call changes the CDS of either copy.";
+      detail = verdict.cdsChanged ? "The included calls change the coding sequence only synonymously." : "No included call changes the CDS of either copy.";
     } else if (verdict.tone === "good") {
       title = "Every arrangement keeps a copy with the reference protein";
-      detail = "Whatever the phase, at least one copy's predicted protein matches the reference.";
+      detail = verdict.total === 1 ? "One copy's predicted protein matches the reference." : "Whatever the phase, at least one copy's predicted protein matches the reference.";
     } else if (verdict.tone === "none") {
-      title = "No arrangement keeps a copy with the reference protein";
-      detail = "Both copies carry protein-changing edits in " + (verdict.total === 1 ? "the only compatible arrangement." : "all " + number(verdict.total) + " compatible arrangements.");
+      title = "No copy keeps the reference protein";
+      detail = verdict.total === 1 ? "Both copies carry protein-changing edits." : "Both copies carry protein-changing edits in all " + number(verdict.total) + " arrangements.";
     } else {
       title = "Phase decides whether a copy keeps the reference protein";
-      const lost = verdict.total - verdict.keep;
-      detail = number(verdict.keep) + " of " + number(verdict.total) + " arrangements " + (verdict.keep === 1 ? "keeps" : "keep") + " one; " + number(lost) + (lost === 1 ? " changes" : " change") + " the protein on both copies. Resolving the block relationships would tell them apart.";
+      detail = number(verdict.keep) + " of " + number(verdict.total) + " arrangements " + (verdict.keep === 1 ? "keeps" : "keep") + " one; the rest change the protein on both copies.";
     }
-    if (verdict.tone !== "empty" && evidence.counts.unknown > 0) detail += " Applies to included calls only: " + plural(evidence.counts.unknown, "coding base") + (evidence.counts.unknown === 1 ? " lacks" : " lack") + " evidence.";
-    if (readEvidence && verdict.tone !== "empty" && readEvidence.supported.length && !state.constraints.some(function (c) { return c.source === "reads"; })) {
-      const outcome = { good: "a copy keeps the reference protein in every remaining arrangement", none: "no remaining arrangement keeps a reference-protein copy",
-        mixed: "phase still decides", conflicting: "the read-supported relationships contradict each other" }[readEvidence.verdict_with];
-      detail += " Reads clearly support " + plural(readEvidence.supported.length, "block relationship") + "; with them applied, " + outcome + ".";
-    }
-    if (parentEvidence && verdict.tone !== "empty" && parentEvidence.supported.length && !state.constraints.some(function (c) { return c.source === "parents"; })) {
-      const parentOutcome = { good: "a copy keeps the reference protein in every remaining arrangement", none: "no remaining arrangement keeps a reference-protein copy",
-        mixed: "phase still decides", conflicting: "the inherited relationships contradict each other" }[parentEvidence.verdict_with];
-      detail += " Inheritance supports " + plural(parentEvidence.supported.length, "block relationship") + "; with them applied, " + parentOutcome + ".";
-    }
-    if (verdict.tone !== "empty" && spliceRegion.length) detail += " " + plural(spliceRegion.length, "splice-region variant") + " not modelled; splicing could change this.";
     text("verdict-title", title);
     text("verdict-detail", detail);
+    const caveats = byId("verdict-caveats");
+    caveats.replaceChildren();
+    if (verdict.tone === "empty") return;
+    const add = function (label, hint) { caveats.append(tip(element("li", "", label), hint)); };
+    if (evidence.counts.unknown > 0) add(plural(evidence.counts.unknown, "coding base") + " without a call", "Results cover the included calls only; variants could hide where there is no reference or variant call.");
+    if (spliceRegion.length) add(plural(spliceRegion.length, "splice-region variant") + " not modelled", "Within 3 exonic or 8 intronic bases of a coding-exon junction. Splicing effects are outside the model.");
+    if ((data.linked_blocks || []).length) add("Blocks linked by evidence before analysis", "--link-evidence merged blocks using clear read or inheritance evidence; these arrangements assume it.");
+  }
+
+  /* ---------- Phase evidence (reads, parents) ---------- */
+
+  const EVIDENCE_SOURCES = [
+    { key: "reads", name: "Reads", data: readEvidence, verb: "read-supported",
+      none: "No read spans two blocks",
+      meta: function (e) { return (e.supported.length ? plural(e.supported.length, "clear relationship") + " · " : "") + plural(e.fragments, "informative fragment") + " · " + e.files.join(", "); },
+      within: function (agree, total) { return "Within blocks, reads agree with the input phase in " + number(agree) + " of " + number(total) + " observations."; },
+      rule: function (e) { return "Clear means at least " + e.thresholds.min_count + " fragments with " + Math.round(100 * e.thresholds.min_fraction) + "% agreeing."; } },
+    { key: "parents", name: "Inheritance", data: parentEvidence, verb: "inherited", none: "No two blocks have calls of clear parental origin",
+      meta: function (e) {
+        const informative = Object.keys(e.variants).filter(function (id) { return e.variants[id].status === "informative"; }).length;
+        return (e.supported.length ? plural(e.supported.length, "clear relationship") + " · " : "") + "parent of origin clear for " + plural(informative, "call") + (e.conflicts ? " · " + plural(e.conflicts, "Mendelian conflict") : "") + " · father " + e.father + ", mother " + e.mother;
+      },
+      within: function (agree, total) { return "Within blocks, inheritance agrees with the input phase for " + number(agree) + " of " + number(total) + " call pairs."; },
+      rule: function () { return "Clear means every informative pair of calls agrees."; } }
+  ];
+  const VERDICT_PHRASES = { good: "A copy keeps the reference protein", none: "No copy keeps the reference protein",
+    mixed: "Phase still decides", conflicting: "Its relationships contradict each other", empty: "No arrangement fits" };
+  const VERDICT_TONES = { good: "good", none: "none", mixed: "mixed", conflicting: "none", empty: "none" };
+
+  function pairRow(pair) {
+    const total = pair.same + pair.opposite;
+    const direction = pair.same >= pair.opposite ? "Same" : "Opposite";
+    const majority = Math.max(pair.same, pair.opposite);
+    const row = element("div", "pair-row");
+    const top = element("div", "pair-top");
+    top.append(element("span", "", blockName(pair.block_a) + " ↔ " + blockName(pair.block_b)), element("strong", "", direction + " · " + number(majority) + " of " + number(total)));
+    const bar = element("div", "agreement-bar");
+    const strong = element("span", "agree"); strong.style.flex = String(majority || 0.0001);
+    const weak = element("span", "dissent"); weak.style.flex = String(total - majority || 0.0001);
+    bar.append(strong, weak);
+    tip(row, direction + " orientation: " + number(pair.same) + " same, " + number(pair.opposite) + " opposite.\n" + pair.variant_pairs.map(function (vp) { return vp.a + " ↔ " + vp.b + ": " + vp.same + " same, " + vp.opposite + " opposite"; }).join("\n"));
+    row.append(top, bar);
+    return row;
+  }
+
+  function renderEvidenceRows() {
+    const present = EVIDENCE_SOURCES.filter(function (source) { return source.data; });
+    const container = byId("evidence-rows");
+    container.replaceChildren();
+    if (!present.length) {
+      const hint = element("p", "evidence-hint");
+      const code = function (value) { return element("code", "", value); };
+      if (blocks.length > 1) {
+        hint.append(document.createTextNode("Phase is unresolved here. Rerun with "), code("--reads sample.bam"), document.createTextNode(" (reads spanning the calls) or "),
+          code("--parents FATHER,MOTHER"), document.createTextNode(" (which parent passed on each allele) to see which arrangement the data support."));
+      } else {
+        hint.append(document.createTextNode("Phase does not change this result. "), code("--reads"), document.createTextNode(" and "), code("--parents"), document.createTextNode(" add read and inheritance evidence when it does."));
+      }
+      container.append(hint);
+      return;
+    }
+    present.forEach(function (source) {
+      const e = source.data;
+      const row = element("article", "evidence-row");
+      row.dataset.source = source.key;
+      const head = element("div", "evidence-head");
+      head.append(element("span", "evidence-name", source.name));
+      const linked = (data.linked_blocks || []).some(function (group) { return group.sources.indexOf(source.key) >= 0; });
+      let outcome, tone;
+      if (e.supported.length) { outcome = VERDICT_PHRASES[e.verdict_with]; tone = VERDICT_TONES[e.verdict_with]; }
+      else if (linked) { outcome = "Used to link blocks before analysis"; tone = "good"; }
+      else if (!e.pairs.length) { outcome = blocks.length > 1 ? source.none : "Nothing left to resolve"; tone = "muted"; }
+      else { outcome = "Evidence too weak or mixed"; tone = "muted"; }
+      head.append(element("span", "evidence-result tone-" + tone, outcome));
+      const withinTotal = e.within_blocks.agree + e.within_blocks.disagree;
+      const meta = element("p", "evidence-meta", source.meta(e) + (withinTotal ? " · agrees with the phase shown in " + number(e.within_blocks.agree) + " of " + number(withinTotal) : ""));
+      const actions = element("div", "evidence-actions");
+      const apply = element("button", "btn btn-small evidence-apply");
+      apply.type = "button";
+      apply.disabled = !e.supported.length;
+      apply.addEventListener("click", function () {
+        if (sourceApplied(source.key)) removeSource(source.key);
+        else e.supported.forEach(function (c) { applyConstraint({ a: c.a, b: c.b, parity: c.parity, sources: [source.key] }); });
+        update();
+      });
+      const details = element("details", "evidence-details");
+      details.append(element("summary", "", e.pairs.length ? "Show " + plural(e.pairs.length, "block pair") : "Details"));
+      const body = element("div", "evidence-body");
+      if (!e.pairs.length) body.append(element("p", "help", "No two blocks are both covered by clear evidence."));
+      e.pairs.forEach(function (pair) { body.append(pairRow(pair)); });
+      const within = e.within_blocks.agree + e.within_blocks.disagree;
+      if (within) body.append(element("p", "help", source.within(e.within_blocks.agree, within)));
+      body.append(element("p", "help", source.rule(e)));
+      details.append(body);
+      actions.append(apply, details);
+      row.append(head, meta, actions);
+      container.append(row);
+    });
+    const agreement = byId("evidence-agreement");
+    if (present.length === 2 && present.every(function (source) { return source.data.supported.length; })) {
+      const parity = new Map(present[0].data.supported.map(function (c) { return [c.a + "|" + c.b, c.parity]; }));
+      const shared = present[1].data.supported.filter(function (c) { return parity.has(c.a + "|" + c.b); });
+      const conflicts = shared.filter(function (c) { return parity.get(c.a + "|" + c.b) !== c.parity; });
+      agreement.hidden = !shared.length;
+      agreement.className = "evidence-agreement" + (conflicts.length ? " disagree" : "");
+      agreement.textContent = conflicts.length
+        ? "Reads and inheritance disagree on " + plural(conflicts.length, "relationship") + "; check the calls before relying on either."
+        : "Reads and inheritance agree on all " + plural(shared.length, "relationship") + " they share.";
+    }
+  }
+
+  function sourceApplied(key) {
+    const source = EVIDENCE_SOURCES.find(function (s) { return s.key === key; });
+    return Boolean(source && source.data && source.data.supported.length) && source.data.supported.every(function (c) {
+      return state.constraints.some(function (k) { return k.sources.indexOf(key) >= 0 && k.parity === c.parity && ((k.a === c.a && k.b === c.b) || (k.a === c.b && k.b === c.a)); });
+    });
+  }
+
+  function refreshEvidenceRows() {
+    document.querySelectorAll(".evidence-row").forEach(function (row) {
+      const applied = sourceApplied(row.dataset.source);
+      const button = row.querySelector(".evidence-apply");
+      button.textContent = applied ? "Applied · undo" : "Apply";
+      button.classList.toggle("is-applied", applied);
+      row.classList.toggle("applied", applied);
+    });
   }
 
   /* ---------- Phase blocks ---------- */
@@ -391,8 +542,9 @@
       const card = element("div", "block-card");
       const name = element("div", "block-name");
       name.append(document.createTextNode(blockName(block.id)));
-      name.append(element("small", "", block.label.replace(/^Unphased .*/, "unphased").replace(/^Phase set /, "PS ").replace(/^Phased calls without PS.*/, "implicit phase set")));
-      tip(name, block.label + "\n" + block.variant_ids.join("\n"));
+      name.append(element("small", "", block.label.replace(/^Unphased .*/, "unphased").replace(/^Phase set /, "PS ").replace(/^Phased calls without PS.*/, "implicit phase set")
+        .replace(/^Linked by (.*) \((\d+) blocks\)$/, "linked · $1")));
+      tip(name, block.label + (block.linked_from ? "\nMerged: " + block.linked_from.join(", ") : "") + "\n" + block.variant_ids.join("\n"));
       const flip = element("button", "flip");
       flip.type = "button";
       flip.append(icon(["M3 5h8l-2.5-2.5", "M13 11H5l2.5 2.5"], "0 0 16 16"), document.createTextNode("Flip"));
@@ -599,10 +751,12 @@
       const first = group[0];
       const card = element("button", "outcome-card");
       card.type = "button";
-      card.dataset.outcomeKey = first.outcome_key;
-      card.setAttribute("aria-pressed", String(first.outcome_key === selected.outcome_key));
+      card.dataset.outcomeKey = proteinKey(first);
+      card.setAttribute("aria-pressed", String(proteinKey(first) === proteinKey(selected)));
       const top = element("div", "outcome-top");
-      top.append(element("strong", "", "Outcome " + outcomeNumber.get(first.outcome_key)), element("span", "", plural(group.length, "arrangement")));
+      const coding = new Set(group.map(function (scenario) { return scenario.outcome_key; })).size;
+      top.append(element("strong", "", "Outcome " + outcomeNumber.get(proteinKey(first))), element("span", "", plural(group.length, "arrangement")));
+      if (coding > 1) tip(top, plural(coding, "coding-sequence variant") + " of this protein pair (synonymous differences).");
       const glyph = element("div", "glyph");
       first.haplotypes.forEach(function (haplotype, copyIndex) {
         const row = element("div", "glyph-row");
@@ -630,7 +784,7 @@
         return (copyIndex ? "B: " : "A: ") + (changes.length ? changes.slice(0, 3).join(", ") + (changes.length > 3 ? " …" : "") : "reference protein");
       });
       card.append(top, glyph, flags, element("p", "outcome-changes", described.join("  ·  ")));
-      card.setAttribute("aria-label", "Outcome " + outcomeNumber.get(first.outcome_key) + ", " + plural(group.length, "arrangement") + ", copy proteins " + first.haplotypes.map(function (haplotype) { return haplotype.protein_length + " amino acids"; }).join(" and "));
+      card.setAttribute("aria-label", "Outcome " + outcomeNumber.get(proteinKey(first)) + ", " + plural(group.length, "arrangement") + ", copy proteins " + first.haplotypes.map(function (haplotype) { return haplotype.protein_length + " amino acids"; }).join(" and "));
       card.addEventListener("click", function () { state.selectedId = first.id; renderSelected(); });
       grid.append(card);
     });
@@ -742,7 +896,8 @@
     state.constraints.forEach(function (constraint, index) {
       const row = element("li");
       const label = element("span", "", blockName(constraint.a) + " ↔ " + blockName(constraint.b));
-      label.append(element("span", "relation" + (constraint.source ? " from-reads" : ""), (constraint.parity === 0 ? "same" : "opposite") + (constraint.source ? " · " + constraint.source : "")));
+      const evidenceSources = constraint.sources.filter(function (source) { return source !== "hypothesis"; });
+      label.append(element("span", "relation" + (evidenceSources.length ? " from-reads" : ""), (constraint.parity === 0 ? "same" : "opposite") + (evidenceSources.length ? " · " + evidenceSources.join(", ") : "")));
       const remove = element("button", "remove-constraint", "×");
       remove.type = "button";
       remove.setAttribute("aria-label", "Remove hypothesis between " + blockName(constraint.a) + " and " + blockName(constraint.b));
@@ -752,61 +907,11 @@
     });
   }
 
-  function applyConstraint(constraint) {
-    const existing = state.constraints.findIndex(function (c) { return (c.a === constraint.a && c.b === constraint.b) || (c.a === constraint.b && c.b === constraint.a); });
-    if (existing < 0) state.constraints.push(constraint); else state.constraints[existing] = constraint;
-  }
+  function applyConstraint(constraint) { state.constraints = mergeConstraint(state.constraints, constraint); }
 
-  function renderEvidencePanel(evidence, ids, options) {
-    if (!evidence || !blocks.length) return;
-    byId(ids.section).hidden = false;
-    const supported = new Set(evidence.supported.map(function (c) { return c.a + "|" + c.b; }));
-    const container = byId(ids.pairs);
-    if (!evidence.pairs.length) container.append(element("p", "help", options.empty));
-    evidence.pairs.forEach(function (pair) {
-      const card = element("div", "read-pair" + (supported.has(pair.block_a + "|" + pair.block_b) ? " supported" : ""));
-      const top = element("div", "read-pair-top");
-      top.append(element("strong", "", blockName(pair.block_a) + " ↔ " + blockName(pair.block_b)), element("span", "", number(pair.same) + " same · " + number(pair.opposite) + " opposite"));
-      const bar = element("div", "read-bar");
-      const same = element("span", "same"); same.style.flex = String(pair.same || 0.0001);
-      const opposite = element("span", "opposite"); opposite.style.flex = String(pair.opposite || 0.0001);
-      bar.append(same, opposite);
-      tip(card, pair.variant_pairs.map(function (vp) { return vp.a + " ↔ " + vp.b + ": " + vp.same + " same, " + vp.opposite + " opposite"; }).join("\n"));
-      card.append(top, bar);
-      container.append(card);
-    });
-    const within = evidence.within_blocks;
-    const total = within.agree + within.disagree;
-    text(ids.within, total ? options.within(within.agree, total) : "");
-    text(ids.rule, options.rule(evidence));
-    const apply = byId(ids.apply);
-    apply.disabled = !evidence.supported.length;
-    apply.addEventListener("click", function () {
-      evidence.supported.forEach(function (c) { applyConstraint({ a: c.a, b: c.b, parity: c.parity, source: options.source }); });
-      update();
-    });
-  }
+  function removeSource(source) { state.constraints = withdrawSource(state.constraints, source); }
 
-  function renderReads() {
-    renderEvidencePanel(readEvidence, { section: "reads-section", pairs: "read-pairs", within: "read-within", rule: "read-rule", apply: "apply-reads" }, {
-      source: "reads",
-      empty: "No read covers two different blocks with clear alleles at both.",
-      within: function (agree, total) { return "Within blocks, reads agree with the input phase in " + number(agree) + " of " + number(total) + " observations."; },
-      rule: function (e) { return "Supported means at least " + e.thresholds.min_count + " fragments, " + Math.round(100 * e.thresholds.min_fraction) + "% agreeing. From " + e.files.join(", ") + " (" + plural(e.fragments, "informative fragment") + ")."; }
-    });
-  }
 
-  function renderParents() {
-    renderEvidencePanel(parentEvidence, { section: "parents-section", pairs: "parent-pairs", within: "parent-within", rule: "parent-rule", apply: "apply-parents" }, {
-      source: "parents",
-      empty: "No two blocks both have a call whose parent of origin is clear.",
-      within: function (agree, total) { return "Within blocks, inheritance agrees with the input phase for " + number(agree) + " of " + number(total) + " call pairs."; },
-      rule: function (e) {
-        const informative = Object.keys(e.variants).filter(function (id) { return e.variants[id].status === "informative"; }).length;
-        return "Father " + e.father + ", mother " + e.mother + " (" + e.source + "). Parent of origin is clear for " + plural(informative, "call") + (e.conflicts ? "; " + plural(e.conflicts, "call") + " conflict with Mendelian inheritance and are not used" : "") + ". Supported means every informative pair agrees.";
-      }
-    });
-  }
 
   function renderInformative() {
     const pairs = (data.informative_pairs || []).filter(function (pair) { return pair.score > 0 && blockLookup.has(pair.block_a) && blockLookup.has(pair.block_b); });
@@ -842,28 +947,27 @@
     const tracks = byId("copy-tracks");
     tracks.replaceChildren(renderCopy(selected, 0), renderCopy(selected, 1));
     layoutPins();
-    byId("outcome-options").querySelectorAll(".outcome-card").forEach(function (card) { card.setAttribute("aria-pressed", String(card.dataset.outcomeKey === selected.outcome_key)); });
+    byId("outcome-options").querySelectorAll(".outcome-card").forEach(function (card) { card.setAttribute("aria-pressed", String(card.dataset.outcomeKey === proteinKey(selected))); });
   }
 
   function update() {
     renderConstraints();
     state.compatible = filterScenarios(scenarios, state.constraints);
-    const groups = groupScenarios(state.compatible);
+    const groups = groupByProtein(state.compatible);
     text("compatible-count", number(state.compatible.length));
     text("outcome-count", number(groups.length));
     renderVerdict();
-    const proteinCount = new Set(state.compatible.map(function (scenario) { return scenario.protein_outcome_key; })).size;
-    const hasProteinKeys = state.compatible.length && state.compatible.every(function (scenario) { return Boolean(scenario.protein_outcome_key); });
+    refreshEvidenceRows();
     text("result-explanation", state.compatible.length
-      ? "Arrangements that produce the same pair of coding sequences are grouped." + (hasProteinKeys ? " They yield " + plural(proteinCount, "distinct predicted protein outcome") + "." : "") + " Select one to view it above."
-      : "Conflicting hypotheses exclude every supported arrangement.");
+      ? "Arrangements that give the same pair of proteins are grouped; synonymous differences are noted on hover. Select one to view it above."
+      : "The applied relationships exclude every supported arrangement.");
     byId("empty-state").hidden = state.compatible.length > 0;
     byId("results-content").hidden = !state.compatible.length;
     byId("outcome-options").hidden = !state.compatible.length;
     const select = byId("scenario-select");
     select.replaceChildren();
     state.compatible.forEach(function (scenario) {
-      select.append(option(scenario.id, "Arrangement " + number(scenarioNumber.get(scenario.id)) + " · outcome " + outcomeNumber.get(scenario.outcome_key)));
+      select.append(option(scenario.id, "Arrangement " + number(scenarioNumber.get(scenario.id)) + " · outcome " + outcomeNumber.get(proteinKey(scenario))));
     });
     select.disabled = state.compatible.length < 2;
     if (!state.compatible.some(function (scenario) { return scenario.id === state.selectedId; })) state.selectedId = state.compatible.length ? state.compatible[0].id : null;
@@ -933,9 +1037,7 @@
     const b = byId("block-b").value;
     if (a === b || !blockLookup.has(a) || !blockLookup.has(b)) return;
     const parity = Number(document.querySelector("input[name='relationship']:checked").value);
-    const existing = state.constraints.findIndex(function (constraint) { return (constraint.a === a && constraint.b === b) || (constraint.a === b && constraint.b === a); });
-    const constraint = { a: a, b: b, parity: parity };
-    if (existing < 0) state.constraints.push(constraint); else state.constraints[existing] = constraint;
+    applyConstraint({ a: a, b: b, parity: parity, sources: ["hypothesis"] });
     update();
   });
   byId("reset-constraints").addEventListener("click", reset);
@@ -967,8 +1069,7 @@
   window.addEventListener("resize", function () { cancelAnimationFrame(frame); frame = requestAnimationFrame(layoutPins); });
   setupTooltip();
   renderInformative();
-  renderReads();
-  renderParents();
+  renderEvidenceRows();
   validatePair();
   update();
 })();
