@@ -571,3 +571,56 @@ def test_refcall_on_a_variant_genotype_still_excludes_it(files):
     locus = load(files, [row(16, "A", "T", gt="0/1", filt="RefCall")])
     assert not locus.variants
     assert any("FILTER=RefCall" in w for w in locus.warnings)
+
+
+def test_splice_region_calls_are_flagged_not_modelled(files):
+    # Coding exons [12,18) and [30,39): junctions at 18 and 30.
+    calls = [row(5, "A", "G"), row(17, "A", "G"), row(21, "A", "G"), row(28, "A", "C", values="0/1:5:12"), row(29, "A", "T", gt="1/1")]
+    locus = load(files, calls)
+    hits = {hit["id"]: (hit["where"], hit["distance"], hit["junction"]) for hit in locus.splice_region}
+    assert hits == {"chr1:17:A>G": ("exon", 2, 18), "chr1:21:A>G": ("intron", 3, 18), "chr1:29:A>T": ("intron", 2, 30)}
+    assert [v.id for v in locus.variants] == ["chr1:17:A>G"]  # Coding consequence still modelled.
+    assert any("3 called variants lie in a splice region" in w for w in locus.warnings)
+    from phasespace.analysis import analyze
+    result = analyze(locus)
+    assert len(result["splice_region"]) == 3 and result["summary"]["splice_region"] == 3
+
+
+def test_single_exon_transcript_has_no_splice_region(files):
+    reference, annotation, write = files
+    annotation.write_text('chr1\ttest\tCDS\t31\t39\t.\t+\t0\tgene_id "G"; transcript_id "TX";\n')
+    reference.write_text(reference.read_text().replace("CCCGGGTAA", "ATGGGGTAA"))
+    Path(str(reference) + ".fai").unlink()
+    pysam.faidx(str(reference))
+    assert load_locus(write([row(29, "A", "T"), row(31, "A", "G")]), reference, annotation, "TX").splice_region == []
+
+
+INFO_HEADER = HEADER.replace("##FORMAT=<ID=GT,", '##INFO=<ID=AF,Number=A,Type=Float,Description="Allele frequency">\n##INFO=<ID=CLNSIG,Number=.,Type=String,Description="Significance">\n##INFO=<ID=DB,Number=0,Type=Flag,Description="Known">\n##FORMAT=<ID=GT,')
+
+
+def test_info_fields_from_the_main_vcf(files):
+    reference, annotation, write = files
+    path = write([row(16, "A", "T,G", gt="1/2", info="AF=0.1,0.0002;CLNSIG=Likely_benign;DB")], header=INFO_HEADER)
+    variant = load_locus(path, reference, annotation, "TX", info_fields=("AF", "CLNSIG", "DB")).variants[0]
+    assert variant.info == {"AF": "0.0002/0.1", "CLNSIG": "Likely benign", "DB": "yes"}  # Alt alleles in sorted order: G, T.
+
+
+def test_info_fields_from_a_separate_vcf_with_other_contig_names(files, tmp_path):
+    reference, annotation, write = files
+    clinvar = tmp_path / "clinvar.vcf"
+    clinvar.write_text(INFO_HEADER.replace("ID=chr1", "ID=1").replace("\tFORMAT\tSAMPLE", "")
+                       + "1\t16\t.\tA\tC,T\t.\t.\tAF=0.3,0.02;CLNSIG=Pathogenic\n1\t32\t.\tC\tG\t.\t.\tAF=0.5\n")
+    pysam.tabix_compress(str(clinvar), str(clinvar) + ".gz")
+    pysam.tabix_index(str(clinvar) + ".gz", preset="vcf")
+    locus = load_locus(write([row(16, "A", "T"), row(32, "C", "T")]), reference, annotation, "TX",
+                       info_fields=("AF", "CLNSIG"), info_from=str(clinvar) + ".gz")
+    assert [v.info for v in locus.variants] == [{"AF": "0.02", "CLNSIG": "Pathogenic"}, {}]  # Second: different ALT.
+    assert locus.source.endswith("+ INFO from clinvar.vcf.gz")
+
+
+def test_info_field_errors(files):
+    reference, annotation, write = files
+    with pytest.raises(PhaseSpaceError, match="INFO field CLNSIG not defined in the VCF header"):
+        load_locus(write([row(16, "A", "T")]), reference, annotation, "TX", info_fields=("CLNSIG",))
+    with pytest.raises(PhaseSpaceError, match="needs --info"):
+        load_locus(write([row(16, "A", "T")]), reference, annotation, "TX", info_from=str(reference))

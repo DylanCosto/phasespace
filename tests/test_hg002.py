@@ -177,3 +177,51 @@ def test_ensembl_contig_names_without_chr_prefix(tmp_path):
     assert locus.variants[0].id == "chr20:47651092:ACAG>A"
     assert any("Contig names differ" in w for w in locus.warnings)
     assert locus.evidence == load("pacbio", GTF, "ENST00000371998.8").evidence
+
+
+def test_real_exonic_splice_region_call_in_sirpa():
+    locus = load("trio", GTF, "ENST00000358771.5")
+    hit = next(hit for hit in locus.splice_region if hit["id"] == "chr20:1915454:C>T")
+    assert (hit["where"], hit["distance"], hit["junction"]) == ("exon", 2, 1915455)  # Second-to-last exonic base.
+    assert any(v.id == hit["id"] for v in locus.variants)
+
+
+def test_info_from_another_real_vcf(tmp_path):
+    # Annotate PacBio calls with GIAB benchmark INFO, matched by position, REF and ALT.
+    locus = load_locus(DATA / "pacbio.HG002.vcf.gz", FASTA, DATA / "gencode.v46.gtf", "ENST00000371998.8",
+                       info_fields=("platforms", "datasets"), info_from=DATA / "giab.HG002.vcf.gz")
+    assert locus.variants[0].info == {"platforms": "3", "datasets": "5"}
+    out = tmp_path / "ncoa3.html"
+    assert main(["report", "--vcf", str(DATA / "pacbio.HG002.vcf.gz"), "--fasta", str(FASTA), "--annotation", str(DATA / "gencode.v46.gtf"),
+                 "--gene", "NCOA3", "--info", "platforms", "--info-from", str(DATA / "giab.HG002.vcf.gz"), "--out", str(out)]) == 0
+    assert '"info":{"platforms":"3"}' in out.read_text()
+
+
+# GATK 4 HaplotypeCaller gVCF from the Illumina reads (see the fixture README).
+
+@pytest.mark.parametrize("transcript", [t for t in EXPECTED])
+def test_gatk_gvcf_loads_and_matches_long_read_calls(transcript):
+    gatk = load("gatk", GTF, transcript)
+    pacbio = load("pacbio", GTF, transcript)
+    assert [v.id for v in gatk.variants] == [v.id for v in pacbio.variants]
+    assert analyze(gatk)["summary"]["verdict"] == analyze(pacbio)["summary"]["verdict"]
+
+
+def test_gatk_starts_the_next_reference_block_after_a_deletion():
+    import pysam
+    with pysam.VariantFile(str(DATA / "gatk.HG002.vcf.gz")) as calls:
+        records = list(calls.fetch("chr20", 47651091, 47651100))
+    deletion = next(r for r in records if r.ref == "ACAG")
+    block = next(r for r in records if r.alts == ("<NON_REF>",) and r.start > deletion.start)
+    assert block.start == deletion.start + len(deletion.ref)  # No overlap with the deleted bases.
+    locus = load("gatk", GTF, "ENST00000371998.8")
+    covered = {base for e in locus.evidence if e.status == "variant" for base in range(e.start, e.end)}
+    assert set(range(deletion.start, deletion.start + 4)) <= covered
+
+
+def test_gatk_read_backed_phase_set_is_used():
+    locus = load("gatk", GTF, "ENST00000217428.7")
+    assert sorted({v.phase_set for v in locus.variants if v.phased}) == ["45512760"]
+    result = analyze(locus)
+    # Reverse strand: the phased pair comes first in CDS order.
+    assert [len(b["variant_ids"]) for b in result["blocks"]] == [2, 1] and result["scenario_count"] == 2

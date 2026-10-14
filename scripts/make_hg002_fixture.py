@@ -10,7 +10,8 @@ README; see docs/validation.md for how they were obtained.
         --gff3 Homo_sapiens.GRCh38.112.chromosome.20.gff3.gz \\
         --vcf pacbio=pacbio-chr20.HG002.g.vcf.gz --vcf deepvariant=dv.HG002.g.vcf.gz \\
         --vcf giab=giab-v4.2.1.HG002.chr20.vcf.gz --vcf trio=trio-phased.HG002.g.vcf.gz \\
-        --vcf whatshap=trio.phased.vcf.gz \\
+        --vcf whatshap=trio.phased.vcf.gz --vcf gatk=illumina.gatk.g.vcf.gz \\
+        --reads hifi=hifi.HG002.chr20.slice.bam --reads illumina=illumina.HG002.chr20.slice.bam \\
         --out tests/data/hg002_chr20
 """
 import argparse
@@ -47,6 +48,7 @@ def main():
     parser.add_argument("--gtf", required=True)
     parser.add_argument("--gff3", required=True)
     parser.add_argument("--vcf", action="append", required=True, help="label=path")
+    parser.add_argument("--reads", action="append", default=[], help="label=BAM; reads over the coding exons, tags removed")
     parser.add_argument("--out", required=True, type=Path)
     args = parser.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
@@ -108,6 +110,33 @@ def main():
     plain.unlink()
     pysam.faidx(str(plain) + ".gz")
 
+    exons = []
+    for line in gtf_lines:
+        fields = line.split("\t")
+        if fields[2] in ("CDS", "stop_codon"):
+            exons.append((int(fields[3]) - 1, int(fields[4])))
+    for item in args.reads:
+        label, path = item.split("=", 1)
+        with pysam.AlignmentFile(path) as source:
+            header = {"HD": {"VN": "1.6", "SO": "coordinate"}, "SQ": [{"SN": "chr20", "LN": source.get_reference_length("chr20")}],
+                      "RG": [{"ID": "HG002", "SM": "HG002"}]}
+            target = args.out / f"{label}.HG002.bam"
+            with pysam.AlignmentFile(str(target) + ".tmp", "wb", header=header) as writer:
+                seen = set()
+                for left, right in sorted(exons):
+                    for read in source.fetch("chr20", left, right):
+                        key = (read.query_name, read.flag, read.reference_start)
+                        if key in seen or read.is_unmapped:
+                            continue
+                        seen.add(key)
+                        copy = pysam.AlignedSegment.from_dict(read.to_dict(), writer.header)
+                        copy.set_tags([("RG", "HG002")])  # Drop kinetics/methylation tags to keep the fixture small.
+                        copy.reference_id, copy.next_reference_id = 0, (0 if read.next_reference_id >= 0 else -1)
+                        writer.write(copy)
+        pysam.sort("-o", str(target), str(target) + ".tmp")
+        Path(str(target) + ".tmp").unlink()
+        pysam.index(str(target))
+
     (args.out / "README.md").write_text(
         "# HG002 chr20 regression fixture\n\n"
         "Real GIAB HG002 calls for six GRCh38 chr20 transcripts, cut by `scripts/make_hg002_fixture.py`.\n"
@@ -126,6 +155,10 @@ def main():
         "phased with WhatsHap 2.8 `phase --ped` without reads, and copied back by `scripts/transfer_phase.py`. "
         "Sites heterozygous in all three samples stay unphased.\n"
         "- `whatshap.HG002.vcf.gz`: the WhatsHap output itself (variant-only, all three samples), for `--phase-from`.\n"
+        "- `gatk.HG002.vcf.gz`: GATK 4.6.2.0 HaplotypeCaller `-ERC GVCF` run on `illumina.HG002.bam` over the coding exons "
+        "(±50 bp), against `GRCh38.chr20` with a sequence dictionary. GATK writes its own read-backed phase (PS).\n"
+        "- `hifi.HG002.bam`, `illumina.HG002.bam`: GIAB HG002 PacBio HiFi Revio 48x and NHGRI Illumina 60x GRCh38 alignments, "
+        "reads over the coding exons only, auxiliary tags removed, header reduced to chr20.\n"
         "- `GRCh38.chr20.masked.fa.gz`: chr20 of the GRCh38 no-alt analysis set used by DeepVariant.\n"
         "- `gencode.v46.gtf`: GENCODE v46 comprehensive annotation. `ensembl112.gff3`: Ensembl 112 chr20 GFF3, "
         "contig renamed from `20` to `chr20`.\n"
