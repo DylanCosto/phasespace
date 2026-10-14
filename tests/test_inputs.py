@@ -263,6 +263,40 @@ def test_overlapping_passing_reference_and_variant_calls_rejected(files):
         load(files, [row(1, "A", "<NON_REF>", info="END=50", fmt="GT:GQ:DP:MIN_DP", values="0/0:50:12:10"), row(16, "A", "T")])
 
 
+def ref_block(pos, end, base="A"):
+    return row(pos, base, "<NON_REF>", info=f"END={end}", fmt="GT:GQ:DP:MIN_DP", values="0/0:50:12:10")
+
+
+def test_gvcf_reference_block_through_deleted_bases_is_not_a_conflict(files):
+    # Some gVCF writers resume reference blocks inside a heterozygous deletion.
+    locus = load(files, [ref_block(13, 30), row(31, "CCC", "C"), ref_block(32, 39, "C")])
+    assert [v.cds_alleles for v in locus.variants] == [("CCC", "C")]
+    spans = [(e.start, e.end, e.status) for e in locus.evidence]
+    assert spans == [(12, 18, "reference"), (30, 33, "variant"), (33, 39, "reference")]
+
+
+def test_reference_block_over_deletion_anchor_still_conflicts(files):
+    with pytest.raises(PhaseSpaceError, match="Conflicting passing reference and variant"):
+        load(files, [ref_block(13, 31), row(31, "CCC", "C"), ref_block(32, 39, "C")])
+
+
+def test_spanning_deletion_allele_covered_by_upstream_deletion_is_accepted(files):
+    locus = load(files, [row(31, "CCC", "C"), row(32, "C", "*"), row(33, "C", "*,<NON_REF>")])
+    assert [v.cds_alleles for v in locus.variants] == [("CCC", "C")]
+    variant_bases = {base for e in locus.evidence if e.status == "variant" for base in range(e.start, e.end)}
+    assert variant_bases == {30, 31, 32}
+
+
+def test_low_quality_spanning_deletion_record_stays_unknown(files):
+    locus = load(files, [row(31, "CCC", "C"), row(32, "C", "*", values="0/1:5:12")])
+    assert any(e.status == "unknown" and e.start == 31 for e in locus.evidence)
+
+
+def test_spanning_deletion_with_another_alternate_allele_is_rejected(files):
+    with pytest.raises(PhaseSpaceError, match="spanning deletion combined"):
+        load(files, [row(31, "CCC", "C"), row(32, "C", "*,T", gt="1/2")])
+
+
 def test_multi_base_block_anchor_dp_does_not_establish_minimum_depth(files):
     locus = load(files, [row(1, "A", "<NON_REF>", gt="0/0", info="END=50")])
     assert all(item.status == "unknown" for item in locus.evidence)
@@ -288,7 +322,7 @@ def test_quality_thresholds_must_be_finite_nonnegative(files, thresholds):
 
 def test_declared_vcf_contig_mismatch_rejected(files):
     reference, annotation, write = files
-    path = write([], header=HEADER.replace("ID=chr1", "ID=1"))
+    path = write([], header=HEADER.replace("ID=chr1", "ID=chr2"))
     with pytest.raises(PhaseSpaceError, match="absent from the VCF header"):
         load_locus(path, reference, annotation, "TX")
 
@@ -347,3 +381,193 @@ def test_unselected_selenocysteine_feature_does_not_block_transcript(files):
     reference, annotation, write = files
     annotation.write_text(annotation.read_text() + 'chr1\ttest\tSelenocysteine\t31\t33\t.\t+\t.\ttranscript_id "OTHER";\n')
     assert load_locus(write([]), reference, annotation, "TX").transcript.id == "TX"
+
+
+def _custom(files, sequence, annotation_text):
+    reference, annotation, write = files
+    reference.write_text(">chr1\n" + sequence.ljust(90, "A") + "\n")
+    Path(str(reference) + ".fai").unlink()
+    pysam.faidx(str(reference))
+    annotation.write_text(annotation_text)
+    return reference, annotation, write([])
+
+
+def gtf(feature, start, end, strand="+", transcript="TX", phase="0"):
+    return f'chr1\ttest\t{feature}\t{start}\t{end}\t.\t{strand}\t{phase}\tgene_id "G"; transcript_id "{transcript}";\n'
+
+
+def test_gtf_stop_codon_is_joined_to_the_cds(files):
+    sequence = "A" * 12 + "ATGAAA" + "A" * 12 + "CCCGGGTAA"
+    reference, annotation, vcf = _custom(files, sequence, gtf("CDS", 13, 18) + gtf("CDS", 31, 36) + gtf("stop_codon", 37, 39))
+    transcript = load_locus(vcf, reference, annotation, "TX").transcript
+    assert transcript.cds_intervals == ((12, 18), (30, 39))
+    assert transcript.reference_cds == "ATGAAACCCGGGTAA"
+
+
+def test_gtf_stop_codon_split_across_exons(files):
+    sequence = "A" * 10 + "ATGAAAT" + "C" * 10 + "AAG"
+    reference, annotation, vcf = _custom(files, sequence, gtf("CDS", 11, 16) + gtf("stop_codon", 17, 17) + gtf("stop_codon", 28, 29, phase="2"))
+    transcript = load_locus(vcf, reference, annotation, "TX").transcript
+    assert transcript.cds_intervals == ((10, 17), (27, 29))
+    assert transcript.reference_cds == "ATGAAATAA"
+
+
+def test_reverse_strand_gtf_stop_codon_precedes_the_cds_genomically(files):
+    sequence = "A" * 10 + "TTACCCCAT"
+    reference, annotation, vcf = _custom(files, sequence, gtf("CDS", 14, 19, "-") + gtf("stop_codon", 11, 13, "-"))
+    transcript = load_locus(vcf, reference, annotation, "TX").transcript
+    assert transcript.cds_intervals == ((10, 19),)
+    assert transcript.reference_cds == "ATGGGGTAA"
+
+
+def test_stop_codon_already_inside_cds_is_not_added_twice(files):
+    reference, annotation, write = files
+    annotation.write_text(annotation.read_text() + gtf("stop_codon", 37, 39))
+    assert load_locus(write([]), reference, annotation, "TX").transcript.reference_cds == "ATGAAACCCGGGTAA"
+
+
+@pytest.mark.parametrize("requested", ["NM_000001.2", "NM_000001", "rna-NM_000001.2"])
+def test_refseq_gff3_transcript_resolves_from_its_accession(files, requested):
+    reference, annotation, write = files
+    annotation.write_text(
+        "##gff-version 3\n"
+        "chr1\tRefSeq\tgene\t1\t90\t.\t+\t.\tID=gene-G;Name=G\n"
+        "chr1\tRefSeq\tmRNA\t1\t90\t.\t+\t.\tID=rna-NM_000001.2;Parent=gene-G;transcript_id=NM_000001.2\n"
+        "chr1\tRefSeq\tCDS\t13\t18\t.\t+\t0\tID=cds-NP_1;Parent=rna-NM_000001.2\n"
+        "chr1\tRefSeq\tCDS\t31\t39\t.\t+\t0\tID=cds-NP_1;Parent=rna-NM_000001.2\n"
+    )
+    locus = load_locus(write([]), reference, annotation, requested)
+    assert locus.transcript.gene == "G"
+    assert locus.transcript.reference_cds == "ATGAAACCCGGGTAA"
+
+
+def test_ensembl_gff3_versioned_id_uses_the_version_attribute(files):
+    reference, annotation, write = files
+    annotation.write_text(
+        "chr1\tens\tmRNA\t1\t90\t.\t+\t.\tID=transcript:ENST1;transcript_id=ENST1;version=4\n"
+        "chr1\tens\tCDS\t13\t18\t.\t+\t0\tParent=transcript:ENST1\n"
+        "chr1\tens\tCDS\t31\t39\t.\t+\t0\tParent=transcript:ENST1\n"
+    )
+    for requested in ("ENST1", "ENST1.4", "transcript:ENST1"):
+        assert load_locus(write([]), reference, annotation, requested).transcript.reference_cds == "ATGAAACCCGGGTAA"
+    with pytest.raises(PhaseSpaceError, match="No CDS features"):
+        load_locus(write([]), reference, annotation, "ENST1.3")
+
+
+def test_unversioned_id_matching_several_versions_is_rejected(files):
+    reference, annotation, write = files
+    annotation.write_text(
+        'chr1\ttest\ttranscript\t1\t90\t.\t+\t.\ttranscript_id "TX.1";\n'
+        'chr1\ttest\ttranscript\t1\t90\t.\t+\t.\ttranscript_id "TX.2";\n'
+        + gtf("CDS", 13, 18, transcript="TX.1") + gtf("CDS", 31, 39, transcript="TX.1")
+        + gtf("CDS", 13, 18, transcript="TX.2") + gtf("CDS", 31, 39, transcript="TX.2")
+    )
+    with pytest.raises(PhaseSpaceError, match="several annotated versions"):
+        load_locus(write([]), reference, annotation, "TX")
+    assert load_locus(write([]), reference, annotation, "TX.2").transcript.id == "TX.2"
+
+
+def phase_file(tmp_path, records, samples=("SAMPLE",)):
+    path = tmp_path / "phased.vcf"
+    header = HEADER.replace("\tSAMPLE\n", "\t" + "\t".join(samples) + "\n")
+    path.write_text(header + "".join(f"chr1\t{pos}\t.\t{ref}\t{alt}\t.\tPASS\t.\tGT:PS\t{values}\n" for pos, ref, alt, values in records))
+    return path
+
+
+def test_phase_from_supplies_gt_order_and_phase_set(files, tmp_path):
+    reference, annotation, write = files
+    phased = phase_file(tmp_path, [(16, "A", "T", "1|0:5"), (32, "C", "T", "0|1:5")])
+    locus = load_locus(write([row(16, "A", "T"), row(32, "C", "T")]), reference, annotation, "TX", phase_from=phased)
+    first, second = locus.variants
+    assert (first.gt, first.alleles, first.cds_alleles, first.phased, first.phase_set) == ((1, 0), ("T", "A"), ("T", "A"), True, "5")
+    assert first.id == "chr1:16:A>T"
+    assert (second.gt, second.alleles, second.phased, second.phase_set) == ((0, 1), ("C", "T"), True, "5")
+    assert any("2 of 2 heterozygous coding calls phased" in w for w in locus.warnings)
+    assert locus.source == "calls.vcf + phase from phased.vcf"
+    # Opposite orientation within one phase set leaves a single arrangement.
+    from phasespace.analysis import analyze
+    result = analyze(locus)
+    assert result["scenario_count"] == 1
+    assert sorted(len(h["variant_ids"]) for h in result["scenarios"][0]["haplotypes"]) == [1, 1]
+
+
+def test_phase_from_replaces_the_inputs_own_phase(files, tmp_path):
+    reference, annotation, write = files
+    phased = phase_file(tmp_path, [(16, "A", "T", "0|1:5")])
+    calls = [row(16, "A", "T", fmt="GT:GQ:DP:PS", values="1|0:50:12:9"), row(32, "C", "T", fmt="GT:GQ:DP:PS", values="0|1:50:12:9")]
+    first, second = load_locus(write(calls), reference, annotation, "TX", phase_from=phased).variants
+    assert (first.gt, first.phase_set) == ((0, 1), "5")
+    assert (second.phased, second.phase_set) == (False, None)
+
+
+def test_phase_from_matches_alleles_by_sequence_not_index(files, tmp_path):
+    reference, annotation, write = files
+    phased = phase_file(tmp_path, [(16, "A", "G,T", "1|0:5")])
+    variant = load_locus(write([row(16, "A", "T,G", gt="0/2")]), reference, annotation, "TX", phase_from=phased).variants[0]
+    assert (variant.gt, variant.alleles, variant.phased) == ((2, 0), ("G", "A"), True)
+
+
+def test_phase_from_ignores_records_with_different_alleles(files, tmp_path):
+    reference, annotation, write = files
+    phased = phase_file(tmp_path, [(16, "A", "C", "0|1:5")])
+    locus = load_locus(write([row(16, "A", "T")]), reference, annotation, "TX", phase_from=phased)
+    assert not locus.variants[0].phased
+    assert any("0 of 1 heterozygous coding call phased; 1 not phased there is treated as unphased" in w for w in locus.warnings)
+
+
+def test_phase_from_sample_selection(files, tmp_path):
+    reference, annotation, write = files
+    single = phase_file(tmp_path, [(16, "A", "T", "0|1:5")], samples=("RENAMED",))
+    locus = load_locus(write([row(16, "A", "T")]), reference, annotation, "TX", phase_from=single)
+    assert locus.variants[0].phased and any("sample RENAMED" in w for w in locus.warnings)
+    several = phase_file(tmp_path, [(16, "A", "T", "0|1:5\t0|1:5")], samples=("A", "B"))
+    with pytest.raises(PhaseSpaceError, match="absent from the phase file"):
+        load_locus(write([row(16, "A", "T")]), reference, annotation, "TX", phase_from=several)
+
+
+def test_vcf_contig_without_chr_prefix_is_matched(files):
+    reference, annotation, write = files
+    path = write([row(16, "A", "T").replace("chr1\t", "1\t", 1)], header=HEADER.replace("ID=chr1", "ID=1"))
+    locus = load_locus(path, reference, annotation, "TX")
+    assert locus.transcript.contig == "1"
+    assert locus.variants[0].id == "1:16:A>T"
+    assert any("Contig names differ" in w and "VCF '1'" in w for w in locus.warnings)
+
+
+def test_reference_contig_without_chr_prefix_is_matched(files):
+    reference, annotation, write = files
+    reference.write_text(reference.read_text().replace(">chr1", ">1"))
+    Path(str(reference) + ".fai").unlink()
+    pysam.faidx(str(reference))
+    # The VCF header names chr1; with the FASTA as "1", lengths are still compared.
+    locus = load_locus(write([row(16, "A", "T")]), reference, annotation, "TX")
+    assert locus.transcript.reference_cds == "ATGAAACCCGGGTAA"
+    assert locus.variants[0].id == "chr1:16:A>T"
+
+
+def test_contig_aliases_cover_chr_prefix_and_mitochondria():
+    from phasespace.inputs import _contig_aliases
+    assert _contig_aliases("chr7") == ["chr7", "7"]
+    assert _contig_aliases("X") == ["X", "chrX"]
+    assert set(_contig_aliases("MT")) == {"MT", "chrMT", "chrM", "M"}
+
+
+def test_variant_id_lists_alternate_alleles_only(files):
+    reference, annotation, write = files
+    multi = load(files, [row(16, "A", "T,G", gt="2|1", fmt="GT:GQ:DP:PS", values="2|1:50:12:3")]).variants[0]
+    assert multi.id == "chr1:16:A>G,T"
+    assert multi.alleles == ("G", "T")
+
+
+def test_refcall_reference_genotype_is_reference_evidence(files):
+    calls = [row(16, "A", "T", gt="0/0", filt="RefCall"), row(32, "C", "T", gt="0/0", filt="RefCall", values="0/0:5:12")]
+    locus = load(files, calls)
+    assert [(e.start, e.end, e.status) for e in locus.evidence if e.start in (15, 31)] == [(15, 16, "reference"), (31, 32, "unknown")]
+    assert any("GQ below 20" in w for w in locus.warnings)
+    assert not locus.variants
+
+
+def test_refcall_on_a_variant_genotype_still_excludes_it(files):
+    locus = load(files, [row(16, "A", "T", gt="0/1", filt="RefCall")])
+    assert not locus.variants
+    assert any("FILTER=RefCall" in w for w in locus.warnings)

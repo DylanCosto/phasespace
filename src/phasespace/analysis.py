@@ -30,25 +30,33 @@ _GENETIC_CODE = {
     "".join(codon): amino
     for codon, amino in zip(product(_BASES, repeat=3), _AMINO_ACIDS)
 }
+# Every codon over the validated alphabet; any N-containing codon is unknown.
+_CODONS = {
+    "".join(codon): _GENETIC_CODE.get("".join(codon), "X")
+    for codon in product(_BASES + "N", repeat=3)
+}
 
 
 def _translation(cds: str) -> tuple[str, int | None, str]:
     """Return expressed prefix, one-based first stop, and all complete codons."""
-    full = "".join(
-        _GENETIC_CODE.get(cds[i : i + 3], "X")
-        for i in range(0, len(cds) - 2, 3)
-    )
+    codon = _CODONS.get
+    full = "".join([codon(cds[i : i + 3], "X") for i in range(0, len(cds) - 2, 3)])
     stop = full.find("*")
     if stop < 0:
         return full, None, full
     return full[:stop], stop + 1, full
 
 
-def _validate(locus: Locus, max_blocks: int) -> tuple[str, list[Variant]]:
+def check_max_blocks(max_blocks: int) -> None:
+    """Reject block caps outside 0..MAX_BLOCKS; shared by the CLI and analyze()."""
     if isinstance(max_blocks, bool) or not isinstance(max_blocks, int):
         raise PhaseSpaceError("max_blocks must be an integer.")
     if not 0 <= max_blocks <= MAX_BLOCKS:
-        raise PhaseSpaceError(f"max_blocks must be between 0 and {MAX_BLOCKS}.")
+        raise PhaseSpaceError(f"max_blocks must be between 0 and {MAX_BLOCKS}; arrangements double with each block.")
+
+
+def _validate(locus: Locus, max_blocks: int) -> tuple[str, list[Variant]]:
+    check_max_blocks(max_blocks)
     reference = locus.transcript.reference_cds.upper()
     if not reference or len(reference) % 3:
         raise PhaseSpaceError("The reference CDS must be nonempty and divisible by three.")
@@ -152,11 +160,13 @@ def _consequences(
     cds: str,
     origins: list[int | None],
     deltas: list[int],
+    reference_translation: tuple[str, int | None, str],
+    translation: tuple[str, int | None, str],
 ) -> list[str]:
     if cds == reference:
         return ["reference"]
-    ref_protein, ref_first_stop, ref_full = _translation(reference)
-    protein, first_stop, full = _translation(cds)
+    ref_protein, ref_first_stop, ref_full = reference_translation
+    protein, first_stop, full = translation
     consequences: list[str] = []
 
     if any(delta % 3 for delta in deltas):
@@ -168,12 +178,21 @@ def _consequences(
 
     # A retained terminal stop moves after an in-frame insertion/deletion. Its
     # amino-acid index alone therefore cannot identify a gained or lost stop.
-    aligned: dict[int, tuple[int, str]] = {}
-    for index, amino in enumerate(full):
-        bases = origins[index * 3 : index * 3 + 3]
-        origin = bases[0]
-        if origin is not None and origin % 3 == 0 and bases == list(range(origin, origin + 3)):
-            aligned[origin // 3] = (index, amino)
+    aligned: dict[int, tuple[int, str]]
+    if not any(deltas):
+        # Substitutions keep every base at its reference coordinate.
+        aligned = {index: (index, amino) for index, amino in enumerate(full)}
+    else:
+        aligned = {}
+        for index, amino in enumerate(full):
+            origin = origins[index * 3]
+            if (
+                origin is not None
+                and origin % 3 == 0
+                and origins[index * 3 + 1] == origin + 1
+                and origins[index * 3 + 2] == origin + 2
+            ):
+                aligned[origin // 3] = (index, amino)
     if first_stop is not None:
         bases = origins[(first_stop - 1) * 3 : first_stop * 3]
         origin = bases[0]
@@ -185,7 +204,13 @@ def _consequences(
         )
         if not retained_or_uncertain_stop:
             consequences.append("stop_gained")
-    if ref_first_stop is not None and aligned.get(ref_first_stop - 1, (None, None))[1] not in ("*", "X"):
+    # A premature stop ends translation before the reference stop is reached,
+    # so that stop is not reported as lost (common after a frameshift).
+    if (
+        ref_first_stop is not None
+        and "stop_gained" not in consequences
+        and aligned.get(ref_first_stop - 1, (None, None))[1] not in ("*", "X")
+    ):
         consequences.append("stop_lost")
     if reference[:3] == "ATG" and cds[:3] != "ATG" and "N" not in cds[:3]:
         consequences.append("start_lost")
@@ -208,7 +233,11 @@ def _consequences(
     return consequences
 
 
-def _haplotype(reference: str, edits: list[tuple[Variant, str]]) -> dict:
+def _haplotype(
+    reference: str,
+    edits: list[tuple[Variant, str]],
+    reference_translation: tuple[str, int | None, str],
+) -> dict:
     cds = reference
     origins: list[int | None] = list(range(len(reference)))
     deltas: list[int] = []
@@ -217,12 +246,14 @@ def _haplotype(reference: str, edits: list[tuple[Variant, str]]) -> dict:
         cds = cds[:start] + allele + cds[end:]
         origins[start:end] = _edit_origins(start, variant.cds_ref.upper(), allele)
         deltas.append(len(allele) - (end - start))
-    protein, first_stop, _ = _translation(cds)
+    translation = _translation(cds)
+    protein, first_stop, _ = translation
     return {
         "variant_ids": [variant.id for variant, _ in edits],
+        "alleles": [allele for _, allele in edits],
         "cds": cds,
         "protein": protein,
-        "consequences": _consequences(reference, cds, origins, deltas),
+        "consequences": _consequences(reference, cds, origins, deltas, reference_translation, translation),
         "first_stop": first_stop,
         "protein_length": len(protein),
     }
@@ -292,6 +323,7 @@ def analyze(locus: Locus, max_blocks: int = 8) -> dict:
             f"up to {MAX_BLOCKS}; no scenarios were discarded."
         )
 
+    reference_translation = _translation(reference)
     scenarios = []
     assignments = product((0, 1), repeat=max(0, len(blocks) - 1))
     for index, tail in enumerate(assignments, start=1):
@@ -304,7 +336,7 @@ def analyze(locus: Locus, max_blocks: int = 8) -> dict:
                 allele = variant.cds_alleles[copy ^ bit].upper()
                 if allele != variant.cds_ref.upper():
                     copy_edits[copy].append((variant, allele))
-        haplotypes = [_haplotype(reference, edits) for edits in copy_edits]
+        haplotypes = [_haplotype(reference, edits, reference_translation) for edits in copy_edits]
         scenarios.append(
             {
                 "id": f"scenario-{index}",
@@ -336,7 +368,7 @@ def analyze(locus: Locus, max_blocks: int = 8) -> dict:
             "N-containing codons translate to X; amino-acid consequences are uncertain "
             "and an unknown codon could contain an earlier stop."
         )
-    ref_protein, ref_first_stop, _ = _translation(reference)
+    ref_protein, ref_first_stop, _ = reference_translation
     return {
         "schema_version": 1,
         "sample": locus.sample,

@@ -156,6 +156,13 @@ def test_single_base_indel_reports_frameshift_and_translates_complete_codons():
     assert "stop_lost" in copy["consequences"]
 
 
+def test_frameshift_with_premature_stop_does_not_also_report_stop_lost():
+    copy = changed_haplotype(analyze(locus("ATGCTAAGCCCCTAA", [variant("del", 2, "GC", "G")])))
+    assert copy["cds"] == "ATGTAAGCCCCTAA"
+    assert copy["first_stop"] == 2
+    assert copy["consequences"] == ["frameshift", "stop_gained"]
+
+
 def test_negative_strand_uses_preprojected_cds_alleles_without_reversing_again():
     edit = replace(variant("A", 3, "C", "T"), pos=104, ref="G", alleles=("G", "A"))
     result = analyze(locus("ATGCAATAA", [edit], strand="-"))

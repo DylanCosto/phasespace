@@ -18,6 +18,29 @@ def _script_json(value: dict) -> str:
     )
 
 
+def _compact(result: dict) -> dict:
+    """Drop per-copy sequences that the browser can rebuild from called edits.
+
+    Two full sequences per arrangement grow as 2**blocks x CDS length (tens of
+    megabytes at the block cap). Each copy keeps its variant IDs and chosen
+    alleles, so report.js reconstructs sequences exactly on demand.
+    """
+    scenarios = result.get("scenarios", [])
+    copies = [copy for scenario in scenarios for copy in scenario.get("haplotypes", [])]
+    if not copies or any("alleles" not in copy for copy in copies):
+        return result
+    compact = dict(result)
+    compact["scenarios"] = [
+        dict(scenario, haplotypes=[
+            {key: value for key, value in copy.items() if key not in ("cds", "protein")}
+            for copy in scenario["haplotypes"]
+        ])
+        for scenario in scenarios
+    ]
+    compact["report_encoding"] = "edits"
+    return compact
+
+
 def write_report(result: dict, output_path: str | Path) -> None:
     """Render an analysis dictionary to a standalone interactive HTML file.
 
@@ -32,5 +55,5 @@ def write_report(result: dict, output_path: str | Path) -> None:
     # substitutions, even if they happen to contain one of these markers.
     html = template.replace("/* PHASESPACE_CSS */", css)
     html = html.replace("/* PHASESPACE_JS */", javascript)
-    html = html.replace("PHASESPACE_DATA", _script_json(result))
+    html = html.replace("PHASESPACE_DATA", _script_json(_compact(result)))
     Path(output_path).write_text(html, encoding="utf-8")

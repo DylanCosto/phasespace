@@ -38,9 +38,23 @@ phasespace report \
   --json reports/transcript.json
 ```
 
-Use the **exact transcript ID** in the annotation. The reference build and contig names must match across all inputs. A `.fai` FASTA index is required; prepare it with `samtools faidx reference.fa`. A bgzip VCF with a tabix/CSI index, or indexed BCF, enables regional reading. Unindexed VCFs are streamed with an explicit notice. The annotation is scanned to locate the requested transcript.
+Give the transcript ID as written in the annotation, with or without its version (for example `ENST00000371998.8` or `ENST00000371998`). GFF3 feature IDs such as `transcript:ENST…` and RefSeq `rna-NM_…` also resolve, as does a RefSeq accession on its own. An unversioned ID that matches more than one annotated version is rejected. All inputs must use the same reference build; contig names may differ only by a `chr` prefix. A `.fai` FASTA index is required; prepare it with `samtools faidx reference.fa`. A bgzip VCF with a tabix/CSI index, or indexed BCF, enables regional reading. Unindexed VCFs are streamed with an explicit notice. The annotation is scanned to locate the requested transcript.
 
-Default call thresholds are GQ ≥ 20 and depth ≥ 5. Multi-base gVCF reference blocks require `MIN_DP` for a positive depth threshold: anchor `DP` alone cannot establish depth throughout a block. Single-base records use `DP` (or `MIN_DP` for a reference block). Missing required quality values, missing genotypes, and failed filters produce unknown evidence. Set thresholds with `--min-gq` and `--min-dp`. Setting minimum depth to zero permits a block with only `DP`, explicitly waiving the block-wide depth check; missing quality/depth fields still remain unknown. Multi-sample files require `--sample`.
+Default call thresholds are GQ ≥ 20 and depth ≥ 5. Multi-base gVCF reference blocks require `MIN_DP` for a positive depth threshold: anchor `DP` alone cannot establish depth throughout a block. Single-base records use `DP` (or `MIN_DP` for a reference block). Missing required quality values, missing genotypes, and failed filters produce unknown evidence. Set thresholds with `--min-gq` and `--min-dp`. Setting minimum depth to zero permits a block with only `DP`, explicitly waiving the block-wide depth check; missing quality/depth fields still remain unknown. Multi-sample files require `--sample`. DeepVariant `RefCall` records with a `0/0` genotype count as reference evidence when they pass these thresholds. Contig names may differ between inputs by a `chr` prefix; positions in the report use the VCF's names.
+
+Deletions in gVCFs are handled whichever way the writer records the deleted bases. A reference block that continues through the bases removed by a called deletion is not treated as a conflict, and a `*` spanning-deletion allele is accepted when an upstream called deletion covers it. A `*` allele combined with another alternate allele at the same site is rejected, because placing it requires read-level phasing.
+
+### Using phase from WhatsHap, longphase or a trio
+
+Phasing tools write variant-only VCFs. In such a file, absent records are unknown evidence, never reference. Pass the phased VCF separately so the gVCF still supplies the evidence:
+
+```bash
+phasespace report --vcf sample.g.vcf.gz --phase-from phased.vcf.gz \
+  --fasta reference.fa --annotation genes.gtf --transcript ENST00000000000.1 \
+  --sample SAMPLE_ID --out reports/transcript.html
+```
+
+Heterozygous calls are matched by position, REF and called allele sequences, so allele numbering may differ between the files (for example in a multi-sample trio VCF). A matched call takes its GT order and `PS` from the phase file. With `--phase-from`, phase comes only from that file: any heterozygous call it does not phase is treated as unphased, so phase sets from the two files are never mixed. The report notes how many calls were phased. If the phase file has one sample with a different name, that sample is used. `scripts/transfer_phase.py` writes the same phase into a gVCF, for use with other tools.
 
 ## What the report shows
 
@@ -49,7 +63,12 @@ Default call thresholds are GQ ≥ 20 and depth ≥ 5. Multi-base gVCF reference
 - Joint sequence effects, including premature stops, amino-acid changes, frameshifts, and compensating indels.
 - Reference-call support, called-variant evidence, and unknown intervals across the annotated CDS.
 - Hypothetical block-orientation constraints and informative block-pair comparisons.
+- A verdict on whether any arrangement keeps a copy with the reference protein sequence, and whether that depends on phase. Synonymous changes alter the CDS but not this verdict.
+- Both gene copies side by side, with each copy's alternate alleles, its predicted protein length on a shared scale, and the first stop.
+- Per-block flip controls that move a block's alleles to the other copy.
 - A local JSON export with the analyzed sequences, calls, evidence, and scenarios.
+
+The report stores each copy as its called edits rather than as full sequences, and rebuilds sequences in the browser on demand. A 10 kb CDS at the 12-block cap produces a report of about 1.6 MB. The report follows the system light or dark setting.
 
 Hypothetical constraints do not change the VCF or become observed evidence. Each scenario is a possible consequence of the **included called variants**. Unknown intervals permit additional unobserved variants, so these are not exhaustive possible biological sequences. “Reference-identical CDS” counts exact sequence matches within this model; it does not establish protein function.
 
@@ -57,7 +76,7 @@ Hypothetical constraints do not change the VCF or become observed evidence. Each
 
 This is a research prototype for diploid coding loci, using the standard genetic code. It supports SNVs, substitutions and sequence-resolved small indels contained within a single CDS segment, including multi-allelic diploid genotypes. Calls on the negative strand are projected into transcript orientation before applying edits.
 
-The first CDS phase must be zero, subsequent CDS phases must agree, and joined CDS length must be divisible by three. Only `CDS` annotation features are used. In GTF files that exclude the terminal stop codon from CDS, terminal stop-loss assessment is consequently unavailable. Partial models, symbolic called alleles, spanning deletions, overlapping edits, and edits crossing CDS boundaries are rejected rather than approximated. Reference mismatches are errors.
+The first CDS phase must be zero, subsequent CDS phases must agree, and joined CDS length must be divisible by three. `CDS` features define the coding sequence. GTF files exclude the terminal stop codon from `CDS`, so their `stop_codon` features are joined to it, including stop codons split across exons. Partial models, symbolic called alleles, spanning-deletion alleles not covered by a called upstream deletion, overlapping edits, and edits crossing CDS boundaries are rejected rather than approximated. Reference mismatches are errors.
 
 The default cap is eight independent heterozygous blocks (at most 128 arrangements after exchanging the two copy labels). `--max-blocks` can raise this to twelve. Larger problems stop with an error; scenarios are never silently sampled or truncated. The report has no scenario probabilities. Phased genotypes without `PS` share an implicit phase set as specified by VCF; different explicit phase sets remain independently oriented.
 
@@ -75,7 +94,7 @@ python -m pytest
 python -m build
 ```
 
-See [the model and validation notes](docs/model.md) for details and [the validation record](docs/validation.md) for the checks performed on this first version.
+See [the architecture guide](docs/architecture.md) for how the code is organised, [the model notes](docs/model.md) for interpretation, and [the validation record](docs/validation.md) for the checks performed, including on real HG002 data.
 
 ## Related work
 
