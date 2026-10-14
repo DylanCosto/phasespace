@@ -27,7 +27,7 @@ from .report import _script_json, write_report
 TIERS = {1: "Phase decides", 2: "No reference protein, disruptive", 3: "No reference protein", 4: "Reference protein kept"}
 COLUMNS = ["tier", "gene", "transcript", "selection", "contig", "verdict", "variants", "heterozygous", "phased",
            "blocks", "arrangements", "protein_outcomes", "changes", "protein_changes", "disruptive", "splice_region", "info",
-           "read_fragments", "read_supported_relationships", "verdict_with_reads",
+           "linked_blocks", "read_fragments", "read_supported_relationships", "verdict_with_reads",
            "parent_supported_relationships", "mendelian_conflicts", "verdict_with_parents", "unknown_cds_bases",
            "cds_bases", "status", "report"]
 
@@ -61,10 +61,19 @@ def _scan_one(model: TranscriptModel) -> dict:
                info="; ".join(f"{v.id.split(':', 1)[1]} {k}={value}" for v in variants for k, value in v.info.items()))
     if not variants:
         return {**row, "tier": 4, "verdict": "good", "status": "no called coding variants"}
+    linked = []
     try:
+        if settings["link_evidence"] and sum(v.gt[0] != v.gt[1] for v in variants) > 1:
+            from .linking import link_blocks
+            locus, linked = link_blocks(locus, reads=settings["reads"], fasta=settings["fasta"], parents=settings["parents"],
+                                        parents_from=settings["parents_from"], min_gq=settings["min_gq"], min_dp=settings["min_dp"])
         result = analyze(locus, max_blocks=settings["max_blocks"])
     except PhaseSpaceError as exc:
         return {**row, "tier": 5, "status": f"not analysed: {exc}"}
+    if linked:
+        from .linking import label_linked
+        label_linked(result, linked)
+        row["linked_blocks"] = sum(len(group["blocks"]) for group in linked)
     if settings["reads"] and len(result["blocks"]) > 1:
         from .reads import add_read_evidence
         evidence = add_read_evidence(result, settings["reads"], settings["fasta"])["read_evidence"]
@@ -93,7 +102,7 @@ def _scan_one(model: TranscriptModel) -> dict:
 def run_scan(vcf: str, fasta: str, annotation: str, out_dir: str | Path, *, sample: str | None = None,
              genes: set[str] | None = None, phase_from: str | None = None, info_fields: tuple[str, ...] = (),
              info_from: str | None = None, reads: list[str] | None = None, parents: tuple[str, str] | None = None,
-             parents_from: str | None = None, min_gq: float = 20, min_dp: int = 5,
+             parents_from: str | None = None, link_evidence: bool = False, min_gq: float = 20, min_dp: int = 5,
              max_blocks: int = 8, reports: str = "candidates", threads: int = 1, log=None) -> dict:
     check_thresholds(min_gq, min_dp)
     check_max_blocks(max_blocks)
@@ -109,7 +118,7 @@ def run_scan(vcf: str, fasta: str, annotation: str, out_dir: str | Path, *, samp
     if not models:
         raise PhaseSpaceError("No supported coding transcripts were found to scan.")
     settings = {"vcf": str(vcf), "fasta": str(fasta), "sample": sample, "min_gq": min_gq, "min_dp": min_dp,
-                "phase_from": phase_from, "info_fields": tuple(info_fields), "info_from": info_from, "reads": list(reads or []), "parents": parents, "parents_from": parents_from or str(vcf), "max_blocks": max_blocks, "reports": reports, "out_dir": str(out_dir)}
+                "phase_from": phase_from, "info_fields": tuple(info_fields), "info_from": info_from, "reads": list(reads or []), "parents": parents, "parents_from": parents_from or str(vcf), "link_evidence": link_evidence, "max_blocks": max_blocks, "reports": reports, "out_dir": str(out_dir)}
     # Fail fast on unreadable inputs or an ambiguous sample before starting workers.
     with LocusReader(vcf, fasta, sample, min_gq, min_dp, phase_from, info_fields, info_from) as probe:
         settings["sample"] = sample = probe.sample

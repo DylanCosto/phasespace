@@ -59,6 +59,10 @@ The report shows these as **observed counts**, kept separate from hypotheses. A 
 
 `--parents FATHER,MOTHER` (sample names; `--parents-from trio.vcf.gz` if they are not in the main VCF) works out which parent passed on each allele of the child's heterozygous calls. Calls whose alleles came from the same parent sit on one copy. A site is informative when only one assignment fits the parents' genotypes. Sites where both parents are heterozygous stay open, and impossible combinations are counted as Mendelian conflicts and never used. Parents' genotypes need passing filters and GQ ≥ `--min-gq`. Depth is checked when present; merged trio files often lack it for genotypes filled from gVCF blocks. Missing parental sites can come from gVCF reference blocks. As with reads, the report shows this as observed evidence with an **Apply inherited relationships** button, and scans add `verdict_with_parents` and `mendelian_conflicts`.
 
+### Link blocks by evidence before enumerating (`--link-evidence`)
+
+Without it, read and inheritance evidence only filter arrangements after they are enumerated, so a gene over the block cap cannot be analysed at all. `--link-evidence` (with `--reads` and/or `--parents`) merges blocks the evidence clearly links before enumerating: the same "supported" thresholds, strongest evidence first. A relationship that contradicts stronger ones is skipped and reported. Linked blocks are labelled with their sources, and the report states that the arrangements assume this evidence. On HG002, SIRPA (20 unphased heterozygous calls, far over the cap) becomes a single arrangement, and HiFi reads, Illumina reads and the parents each give the identical result.
+
 ### Show annotations you already have
 
 `--info CLNSIG,AF` shows those INFO fields for each variant in reports and scans. By default they come from the main VCF. `--info-from clinvar.vcf.gz` reads them from a separate indexed VCF, such as ClinVar or gnomAD sites, matching calls by position, REF and ALT. Contig names may differ by a `chr` prefix. Per-allele fields (`Number=A` or `R`) are taken for the called alternate alleles. Nothing is looked up online.

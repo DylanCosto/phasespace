@@ -70,6 +70,10 @@ For the 522 GIAB chr20 coding alleles analysed singly, PhaseSpace's p. changes m
 
 With HG003 as father and HG004 as mother (the merged DeepTrio genotypes with GQ < 20 masked), inheritance evidence was computed for every chr20 MANE transcript with at least two blocks in the unphased HG002 gVCF (74 transcripts). It agreed with WhatsHap's transmission phasing of the same trio in all 186 informative call pairs, with no disagreements. The verdict with inherited relationships applied equalled the trio-phased verdict in 74 of 74 transcripts. A further 6 pairs were informative by inheritance, but WhatsHap left them unphased. A first version required parents' depth, so it wrongly called sites uninformative where the merged file had GQ but no DP; this was fixed and is covered by a test.
 
+## Evidence-linked enumeration (2026-10-14)
+
+Unphased, SIRPA's 20 heterozygous coding calls are 20 blocks, beyond the 12-block cap. With `--link-evidence`, HiFi reads, Illumina reads and inheritance (HG003/HG004) each link all 20 into one block. All three give the same single pair of coding sequences (identical outcome key), with a copy keeping the reference protein. A synthetic test builds contradictory read support (A–B and B–C strongly "same", A–C weakly "opposite") and checks that the weaker relationship is skipped and reported.
+
 ## Important scope
 
 These tests establish behavior for the supported computational model. They do not establish biological function or clinical performance. Transcript annotation completeness, genotype quality, the correct reference build and supported genetic code remain necessary inputs. Missing evidence never becomes an inferred reference call.
