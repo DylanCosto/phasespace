@@ -322,7 +322,7 @@ def test_quality_thresholds_must_be_finite_nonnegative(files, thresholds):
 
 def test_declared_vcf_contig_mismatch_rejected(files):
     reference, annotation, write = files
-    path = write([], header=HEADER.replace("ID=chr1", "ID=1"))
+    path = write([], header=HEADER.replace("ID=chr1", "ID=chr2"))
     with pytest.raises(PhaseSpaceError, match="absent from the VCF header"):
         load_locus(path, reference, annotation, "TX")
 
@@ -480,7 +480,7 @@ def test_phase_from_supplies_gt_order_and_phase_set(files, tmp_path):
     locus = load_locus(write([row(16, "A", "T"), row(32, "C", "T")]), reference, annotation, "TX", phase_from=phased)
     first, second = locus.variants
     assert (first.gt, first.alleles, first.cds_alleles, first.phased, first.phase_set) == ((1, 0), ("T", "A"), ("T", "A"), True, "5")
-    assert first.id == "chr1:16:A>T,A"
+    assert first.id == "chr1:16:A>T"
     assert (second.gt, second.alleles, second.phased, second.phase_set) == ((0, 1), ("C", "T"), True, "5")
     assert any("2 of 2 heterozygous coding calls phased" in w for w in locus.warnings)
     assert locus.source == "calls.vcf + phase from phased.vcf"
@@ -523,3 +523,51 @@ def test_phase_from_sample_selection(files, tmp_path):
     several = phase_file(tmp_path, [(16, "A", "T", "0|1:5\t0|1:5")], samples=("A", "B"))
     with pytest.raises(PhaseSpaceError, match="absent from the phase file"):
         load_locus(write([row(16, "A", "T")]), reference, annotation, "TX", phase_from=several)
+
+
+def test_vcf_contig_without_chr_prefix_is_matched(files):
+    reference, annotation, write = files
+    path = write([row(16, "A", "T").replace("chr1\t", "1\t", 1)], header=HEADER.replace("ID=chr1", "ID=1"))
+    locus = load_locus(path, reference, annotation, "TX")
+    assert locus.transcript.contig == "1"
+    assert locus.variants[0].id == "1:16:A>T"
+    assert any("Contig names differ" in w and "VCF '1'" in w for w in locus.warnings)
+
+
+def test_reference_contig_without_chr_prefix_is_matched(files):
+    reference, annotation, write = files
+    reference.write_text(reference.read_text().replace(">chr1", ">1"))
+    Path(str(reference) + ".fai").unlink()
+    pysam.faidx(str(reference))
+    # The VCF header names chr1; with the FASTA as "1", lengths are still compared.
+    locus = load_locus(write([row(16, "A", "T")]), reference, annotation, "TX")
+    assert locus.transcript.reference_cds == "ATGAAACCCGGGTAA"
+    assert locus.variants[0].id == "chr1:16:A>T"
+
+
+def test_contig_aliases_cover_chr_prefix_and_mitochondria():
+    from phasespace.inputs import _contig_aliases
+    assert _contig_aliases("chr7") == ["chr7", "7"]
+    assert _contig_aliases("X") == ["X", "chrX"]
+    assert set(_contig_aliases("MT")) == {"MT", "chrMT", "chrM", "M"}
+
+
+def test_variant_id_lists_alternate_alleles_only(files):
+    reference, annotation, write = files
+    multi = load(files, [row(16, "A", "T,G", gt="2|1", fmt="GT:GQ:DP:PS", values="2|1:50:12:3")]).variants[0]
+    assert multi.id == "chr1:16:A>G,T"
+    assert multi.alleles == ("G", "T")
+
+
+def test_refcall_reference_genotype_is_reference_evidence(files):
+    calls = [row(16, "A", "T", gt="0/0", filt="RefCall"), row(32, "C", "T", gt="0/0", filt="RefCall", values="0/0:5:12")]
+    locus = load(files, calls)
+    assert [(e.start, e.end, e.status) for e in locus.evidence if e.start in (15, 31)] == [(15, 16, "reference"), (31, 32, "unknown")]
+    assert any("GQ below 20" in w for w in locus.warnings)
+    assert not locus.variants
+
+
+def test_refcall_on_a_variant_genotype_still_excludes_it(files):
+    locus = load(files, [row(16, "A", "T", gt="0/1", filt="RefCall")])
+    assert not locus.variants
+    assert any("FILTER=RefCall" in w for w in locus.warnings)

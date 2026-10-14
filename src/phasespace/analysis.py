@@ -47,11 +47,16 @@ def _translation(cds: str) -> tuple[str, int | None, str]:
     return full[:stop], stop + 1, full
 
 
-def _validate(locus: Locus, max_blocks: int) -> tuple[str, list[Variant]]:
+def check_max_blocks(max_blocks: int) -> None:
+    """Reject block caps outside 0..MAX_BLOCKS; shared by the CLI and analyze()."""
     if isinstance(max_blocks, bool) or not isinstance(max_blocks, int):
         raise PhaseSpaceError("max_blocks must be an integer.")
     if not 0 <= max_blocks <= MAX_BLOCKS:
-        raise PhaseSpaceError(f"max_blocks must be between 0 and {MAX_BLOCKS}.")
+        raise PhaseSpaceError(f"max_blocks must be between 0 and {MAX_BLOCKS}; arrangements double with each block.")
+
+
+def _validate(locus: Locus, max_blocks: int) -> tuple[str, list[Variant]]:
+    check_max_blocks(max_blocks)
     reference = locus.transcript.reference_cds.upper()
     if not reference or len(reference) % 3:
         raise PhaseSpaceError("The reference CDS must be nonempty and divisible by three.")

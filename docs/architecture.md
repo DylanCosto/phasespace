@@ -1,0 +1,45 @@
+# Architecture
+
+PhaseSpace is a Python package in `src/phasespace` with three stages and a CLI. Every stage passes plain data forward, so each one can be tested on its own. Internal coordinates are zero-based and half-open. Positions shown to users are one-based.
+
+```
+inputs.load_locus  ──▶  Locus  ──▶  analysis.analyze  ──▶  result dict  ──▶  report.write_report  ──▶  HTML
+   (VCF/gVCF, FASTA,                (enumerate phase                         (inline CSS/JS, data
+    GTF/GFF3, phase VCF)             arrangements)                            embedded as JSON)
+```
+
+## `models.py`
+
+Frozen dataclasses shared by every stage: `Transcript`, `Variant`, `Evidence`, `Locus`. `PhaseSpaceError` is the one error type for anything outside the supported model. The CLI prints it and exits with status 2.
+
+## `inputs.py` — reading one locus
+
+`load_locus(vcf_path, fasta_path, annotation_path, transcript_id, sample=None, min_gq=20, min_dp=5, phase_from=None) -> Locus`
+
+- **Annotation.** The transcript's `CDS` features define the coding sequence. GTF `stop_codon` features are joined to it, because GTF leaves the stop codon out of `CDS`. A transcript ID resolves exactly; or as a GFF3 `ID`, `transcript_id` or `transcript_id.version`; or without its version when only one annotated version exists. Lines that cannot belong to the transcript are skipped before parsing. Partial models, inconsistent CDS phases and translation exceptions are rejected.
+- **Contigs.** The annotation, FASTA, VCF and phase file may name a contig with or without a `chr` prefix (`chrM` and `MT` are also equivalent). User-facing positions and variant IDs use the VCF's name.
+- **Evidence.** Reference evidence needs an explicit passing homozygous-reference call or a gVCF block. A missing record is unknown evidence, never reference. DeepVariant's `FILTER=RefCall` on a `0/0` genotype counts as reference, subject to the same GQ and depth thresholds. Multi-base blocks need `MIN_DP` when the depth threshold is positive. A called deletion's REF span is variant evidence, and reference blocks running through its deleted bases are not treated as conflicts.
+- **Calls.** Alleles are projected into transcript orientation. Variant IDs are `contig:pos:REF>ALT[,ALT]`, with the alternate alleles sorted so the ID does not depend on genotype order. Symbolic alleles, overlapping edits, edits crossing CDS boundaries and REF mismatches raise `PhaseSpaceError`. A `*` allele is accepted only when a called upstream deletion covers it.
+- **Phase.** Genotype order and `PS` come from the input; phased calls without `PS` share an implicit set. With `phase_from`, phase comes only from that VCF. Calls match by position, REF and allele sequence, and any heterozygous call the phase file does not phase becomes unphased.
+
+`check_thresholds(min_gq, min_dp)` validates thresholds; the CLI calls it before reading any input.
+
+## `analysis.py` — enumerating arrangements
+
+`analyze(locus, max_blocks=8) -> dict` (JSON-serialisable, `schema_version` 1)
+
+- Heterozygous calls group into blocks: one per explicit `PS`, one implicit block for phased calls without `PS`, and one per unphased call. Homozygous calls sit on both copies.
+- The first block's orientation is fixed, removing the copy-label symmetry, so B blocks give 2^(B−1) arrangements. Exceeding `max_blocks` (0–12; `check_max_blocks`) raises an error. Arrangements are never sampled or truncated.
+- Each arrangement (`scenarios[]`) has two copies (`haplotypes[]`). Each copy records `variant_ids`, the `alleles` it carries, `cds`, `protein` (up to the first stop), `consequences`, `first_stop` and `protein_length`. Consequences use the standard genetic code and track base origins, so in-frame indels do not create false stop gains or losses.
+- `outcome_key` groups arrangements by their unordered pair of CDS sequences, and `protein_outcome_key` by their predicted proteins. `informative_pairs` ranks block pairs by how many protein outcomes their relative orientation separates. This is not a probability.
+
+## `report.py` and `assets/` — the HTML report
+
+`write_report(result, path)` inlines `report.css` and `report.js` into `report.html` and embeds the result as JSON. Strings are escaped so data can never become markup, and the page makes no network requests (CSP `connect-src 'none'`).
+
+To keep files small, the embedded result drops each copy's `cds` and `protein` (`report_encoding: "edits"`). `report.js` rebuilds them from the reference and the copy's alleles when needed, and the JSON export restores the full schema. The browser-side functions (`filterScenarios`, `expandAnalysis`, `phaseVerdict`, `flipTarget`, `changeLabel`, `placeLabels`, …) are exported for Node, and `tests/test_report.py` tests them directly.
+
+## Tests and fixtures
+
+- `tests/test_inputs.py`, `test_analysis.py`, `test_report.py`, `test_cli.py`: synthetic cases with known answers.
+- `tests/test_hg002.py`: real GIAB HG002 chr20 calls in `tests/data/hg002_chr20`, made by `scripts/make_hg002_fixture.py`. They cover six transcripts, three callers or inputs, trio-phased data and both annotation formats. See `docs/validation.md` for how the data were obtained and checked.

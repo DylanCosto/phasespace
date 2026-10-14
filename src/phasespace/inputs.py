@@ -196,10 +196,39 @@ def _number(value: object) -> float | None:
         return None
 
 
-def _quality(record: object, call: object, min_gq: float, min_dp: int, block: bool) -> tuple[list[str], float | None, int | None]:
+def _contig_aliases(name: str) -> list[str]:
+    """The name itself, then the same contig with or without a ``chr`` prefix."""
+    bare = name[3:] if name.lower().startswith("chr") else name
+    names = [name, bare, "chr" + bare]
+    if bare.upper() in ("M", "MT"):
+        names += ["chrM", "MT", "chrMT", "M"]
+    return list(dict.fromkeys(names))
+
+
+def _resolve_contig(name: str, available: Iterable[str]) -> str | None:
+    available = set(available)
+    return next((alias for alias in _contig_aliases(name) if alias in available), None)
+
+
+def check_thresholds(min_gq: float, min_dp: int) -> None:
+    """Reject quality thresholds that cannot be applied; shared by the CLI and loader."""
+    try:
+        valid = math.isfinite(min_gq) and min_gq >= 0 and math.isfinite(min_dp) and min_dp >= 0 and int(min_dp) == min_dp
+    except (ValueError, TypeError, OverflowError):
+        valid = False
+    if not valid:
+        raise PhaseSpaceError("Quality thresholds must be finite and nonnegative; minimum depth must be an integer.")
+
+
+def _quality(record: object, call: object, min_gq: float, min_dp: int, block: bool,
+             reference_call: bool = False) -> tuple[list[str], float | None, int | None]:
+    """Reasons a call cannot be used. DeepVariant marks confident homozygous-
+    reference calls FILTER=RefCall; on a reference genotype that filter is not a
+    failure, but GQ and depth thresholds still apply."""
     reasons = []
     filters = set(record.filter.keys())
-    if filters - {"PASS", "."}:
+    allowed = {"PASS", ".", "RefCall"} if reference_call else {"PASS", "."}
+    if filters - allowed:
         reasons.append("record FILTER=" + ";".join(sorted(filters)))
     ft = call.get("FT")
     ft_items = ft if isinstance(ft, (tuple, list)) else [ft]
@@ -343,6 +372,11 @@ def _apply_phase(variants: list[Variant], phase_path: str | Path, sample: str, c
         name = sample if sample in samples else samples[0] if len(samples) == 1 else None
         if name is None:
             raise PhaseSpaceError(f"Sample {sample!r} is absent from the phase file, which has {len(samples)} samples.")
+        if reader.header.contigs:
+            resolved = _resolve_contig(contig, reader.header.contigs)
+            if resolved is None:
+                raise PhaseSpaceError(f"Contig {contig!r} is absent from the phase file header.")
+            contig = resolved
         try:
             records = reader.fetch(contig, *region)
         except (ValueError, OSError):
@@ -371,9 +405,7 @@ def _apply_phase(variants: list[Variant], phase_path: str | Path, sample: str, c
             continue
         order, phase_set = match
         if order != variant.alleles:
-            # IDs list alleles in genotype order, so rebuild it as a phased input would.
-            identifier = variant.id.rsplit(">", 1)[0] + ">" + ",".join(variant.alleles[::-1])
-            variant = replace(variant, id=identifier, gt=variant.gt[::-1], alleles=variant.alleles[::-1], cds_alleles=variant.cds_alleles[::-1])
+            variant = replace(variant, gt=variant.gt[::-1], alleles=variant.alleles[::-1], cds_alleles=variant.cds_alleles[::-1])
         result.append(replace(variant, phased=True, phase_set=None if phase_set is None else str(phase_set)))
         applied += 1
     total = applied + unmatched
@@ -393,13 +425,10 @@ def load_locus(vcf_path: str | Path, fasta_path: str | Path, annotation_path: st
     Phased records preserve their genotype order and PS. Phased calls without PS
     remain marked as such for the analysis layer's documented implicit block.
     With ``phase_from``, phase for heterozygous calls comes only from that VCF.
+    Contig names may differ between inputs by a ``chr`` prefix (and chrM/MT);
+    reported positions use the VCF's name.
     """
-    try:
-        valid_thresholds = math.isfinite(min_gq) and min_gq >= 0 and math.isfinite(min_dp) and min_dp >= 0 and int(min_dp) == min_dp
-    except (ValueError, TypeError, OverflowError):
-        valid_thresholds = False
-    if not valid_thresholds:
-        raise PhaseSpaceError("Quality thresholds must be finite and nonnegative; minimum depth must be an integer.")
+    check_thresholds(min_gq, min_dp)
     contig, strand, gene, intervals = _read_annotation(Path(annotation_path), transcript_id)
     warnings: list[str] = []
     variants: list[Variant] = []
@@ -413,12 +442,13 @@ def load_locus(vcf_path: str | Path, fasta_path: str | Path, annotation_path: st
     except (ValueError, OSError) as exc:
         raise PhaseSpaceError(f"Cannot open indexed reference FASTA: {exc}") from exc
     with fasta:
-        if contig not in fasta.references:
-            raise PhaseSpaceError(f"Annotation contig {contig!r} is absent from the reference FASTA. Contig names must match exactly.")
-        contig_length = fasta.get_reference_length(contig)
+        fasta_contig = _resolve_contig(contig, fasta.references)
+        if fasta_contig is None:
+            raise PhaseSpaceError(f"Annotation contig {contig!r} is absent from the reference FASTA (also tried {', '.join(repr(a) for a in _contig_aliases(contig)[1:])}).")
+        contig_length = fasta.get_reference_length(fasta_contig)
         if intervals[-1][1] > contig_length:
             raise PhaseSpaceError("CDS annotation extends beyond the reference contig.")
-        reference_cds = "".join(fasta.fetch(contig, left, right).upper() for left, right in intervals)
+        reference_cds = "".join(fasta.fetch(fasta_contig, left, right).upper() for left, right in intervals)
         if not _BASES.fullmatch(reference_cds):
             raise PhaseSpaceError("The reference CDS contains unsupported bases; only A, C, G, T and N are supported.")
         if strand == "-":
@@ -431,12 +461,17 @@ def load_locus(vcf_path: str | Path, fasta_path: str | Path, annotation_path: st
         except (ValueError, OSError) as exc:
             raise PhaseSpaceError(f"Cannot open VCF/gVCF/BCF: {exc}") from exc
         with reader:
-            if reader.header.contigs and contig not in reader.header.contigs:
-                raise PhaseSpaceError(f"Annotation contig {contig!r} is absent from the VCF header. Contig names must match exactly.")
-            if contig in reader.header.contigs:
-                declared_length = reader.header.contigs[contig].length
+            vcf_contig = fasta_contig
+            if reader.header.contigs:
+                vcf_contig = _resolve_contig(contig, reader.header.contigs)
+                if vcf_contig is None:
+                    raise PhaseSpaceError(f"Annotation contig {contig!r} is absent from the VCF header (also tried {', '.join(repr(a) for a in _contig_aliases(contig)[1:])}).")
+                declared_length = reader.header.contigs[vcf_contig].length
                 if declared_length is not None and declared_length != contig_length:
-                    raise PhaseSpaceError(f"Contig length mismatch for {contig!r}: VCF declares {declared_length}, reference FASTA has {contig_length}.")
+                    raise PhaseSpaceError(f"Contig length mismatch for {vcf_contig!r}: VCF declares {declared_length}, reference FASTA has {contig_length}.")
+            if len({contig, fasta_contig, vcf_contig}) > 1:
+                warnings.append(f"Contig names differ between inputs (annotation {contig!r}, reference {fasta_contig!r}, VCF {vcf_contig!r}); they were matched by their chr prefix.")
+            transcript = replace(transcript, contig=vcf_contig)
             samples = list(reader.header.samples)
             if sample is None:
                 if len(samples) != 1:
@@ -445,13 +480,13 @@ def load_locus(vcf_path: str | Path, fasta_path: str | Path, annotation_path: st
             if sample not in samples:
                 raise PhaseSpaceError(f"Sample {sample!r} is absent from the input.")
             try:
-                records = reader.fetch(contig, intervals[0][0], intervals[-1][1])
+                records = reader.fetch(vcf_contig, intervals[0][0], intervals[-1][1])
             except (ValueError, OSError):
                 records = iter(reader)
                 warnings.append("Input has no usable regional index; streamed records. BGZF VCF with a tabix/CSI index or indexed BCF enables regional loading.")
             try:
                 for record in records:
-                    if record.contig != contig:
+                    if record.contig != vcf_contig:
                         continue
                     start = record.start
                     ref = (record.ref or "").upper()
@@ -460,10 +495,10 @@ def load_locus(vcf_path: str | Path, fasta_path: str | Path, annotation_path: st
                     clips = list(_clips(start, span_end, intervals))
                     if not clips:
                         continue
-                    location = f"{contig}:{start + 1}"
+                    location = f"{vcf_contig}:{start + 1}"
                     if not _BASES.fullmatch(ref) or start < 0 or ref_end > contig_length:
                         raise PhaseSpaceError(f"Invalid REF allele or reference bounds at {location}.")
-                    observed_ref = fasta.fetch(contig, start, ref_end).upper()
+                    observed_ref = fasta.fetch(fasta_contig, start, ref_end).upper()
                     if ref != observed_ref:
                         raise PhaseSpaceError(f"REF mismatch at {location}: VCF has {ref}, reference FASTA has {observed_ref}. Check genome build and reference.")
                     call = record.samples[sample]
@@ -515,7 +550,7 @@ def load_locus(vcf_path: str | Path, fasta_path: str | Path, annotation_path: st
                         clips = list(_clips(start, ref_end, intervals))
                         if not clips:
                             continue
-                    reasons, gq, dp = _quality(record, call, min_gq, min_dp, block)
+                    reasons, gq, dp = _quality(record, call, min_gq, min_dp, block, reference_call=not has_alt)
                     if gt is None or len(gt) != 2 or any(value is None for value in gt):
                         reasons.insert(0, "missing or partial genotype")
                     if reasons:
@@ -524,7 +559,8 @@ def load_locus(vcf_path: str | Path, fasta_path: str | Path, annotation_path: st
                         raw_evidence.extend(Evidence(left, right, "unknown", detail) for left, right in clips)
                         continue
                     if not has_alt:
-                        raw_evidence.extend(Evidence(left, right, "reference", "Passing homozygous-reference genotype.") for left, right in clips)
+                        detail = "Homozygous-reference genotype (DeepVariant RefCall)." if "RefCall" in record.filter.keys() else "Passing homozygous-reference genotype."
+                        raw_evidence.extend(Evidence(left, right, "reference", detail) for left, right in clips)
                         continue
                     alleles = tuple(record.alleles[value].upper() for value in gt)
                     cds_start, cds_end, cds_ref, cds_alleles = _project(start, ref_end, ref, alleles, transcript)
@@ -532,7 +568,8 @@ def load_locus(vcf_path: str | Path, fasta_path: str | Path, annotation_path: st
                         raise PhaseSpaceError(f"Internal CDS projection mismatch at {location}.")
                     ps = call.get("PS")
                     phase_set = str(ps) if call.phased and ps is not None else None
-                    variant_id = f"{location}:{ref}>{','.join(alleles)}"
+                    # Name the call by its alternate alleles, independent of genotype order.
+                    variant_id = f"{location}:{ref}>{','.join(sorted(set(alleles) - {ref}))}"
                     variants.append(Variant(variant_id, start, ref, alleles, tuple(gt), call.phased, phase_set,
                                             cds_start, cds_end, cds_ref, cds_alleles, gq, dp))
                     raw_evidence.extend(Evidence(left, right, "variant", "Passing variant genotype.") for left, right in clips)
@@ -541,7 +578,7 @@ def load_locus(vcf_path: str | Path, fasta_path: str | Path, annotation_path: st
                     raise
                 raise PhaseSpaceError(f"Cannot interpret variant records: {exc}") from exc
     if phase_from is not None:
-        variants = _apply_phase(variants, phase_from, sample, contig, (intervals[0][0], intervals[-1][1]), warnings)
+        variants = _apply_phase(variants, phase_from, sample, transcript.contig, (intervals[0][0], intervals[-1][1]), warnings)
     variants.sort(key=lambda variant: variant.cds_start)
     evidence = _merge_evidence(_without_deleted_tails(raw_evidence, deleted_tails), intervals)
     if any(item.status == "unknown" for item in evidence):

@@ -31,8 +31,8 @@ EXPECTED = {
 }
 # Coding bases without usable evidence; the variant-only GIAB VCF leaves almost all unknown.
 UNKNOWN = {
-    "pacbio": {"NCOA3": 2, "TP53TG5": 3, "CDC25B": 4, "SPINT3": 0, "DEFB126": 0},
-    "deepvariant": {"NCOA3": 5, "TP53TG5": 2, "CDC25B": 0, "SPINT3": 1, "DEFB126": 0},
+    "pacbio": {"NCOA3": 2, "TP53TG5": 2, "CDC25B": 4, "SPINT3": 0, "DEFB126": 0},
+    "deepvariant": {"NCOA3": 0, "TP53TG5": 2, "CDC25B": 0, "SPINT3": 0, "DEFB126": 0},
 }
 
 
@@ -158,3 +158,22 @@ def test_cli_phase_from_on_real_data(tmp_path):
     assert result["scenario_count"] == 2
     assert result["source"] == "deepvariant.HG002.vcf.gz + phase from whatshap.HG002.vcf.gz"
     assert any("19 of 20 heterozygous coding calls phased" in w for w in result["warnings"])
+
+
+def test_deepvariant_refcall_counts_as_reference_evidence():
+    # Five NCOA3 coding bases are covered only by DeepVariant RefCall records (0/0, GQ >= 20).
+    locus = load("deepvariant", GTF, "ENST00000371998.8")
+    refcall = [e for e in locus.evidence if "RefCall" in e.detail]
+    assert sum(e.end - e.start for e in refcall) == 5
+    assert all(e.status == "reference" for e in refcall)
+
+
+def test_ensembl_contig_names_without_chr_prefix(tmp_path):
+    # Ensembl names the contig "20"; the reference and VCF use "chr20".
+    plain = tmp_path / "ensembl.gff3"
+    plain.write_text("".join(line[3:] if line.startswith("chr20\t") else line for line in (DATA / "ensembl112.gff3").read_text().splitlines(True)))
+    locus = load_locus(DATA / "pacbio.HG002.vcf.gz", FASTA, plain, "ENST00000371998")
+    assert locus.transcript.contig == "chr20"
+    assert locus.variants[0].id == "chr20:47651092:ACAG>A"
+    assert any("Contig names differ" in w for w in locus.warnings)
+    assert locus.evidence == load("pacbio", GTF, "ENST00000371998.8").evidence

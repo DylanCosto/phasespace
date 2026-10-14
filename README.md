@@ -38,9 +38,9 @@ phasespace report \
   --json reports/transcript.json
 ```
 
-Give the transcript ID as written in the annotation, with or without its version (for example `ENST00000371998.8` or `ENST00000371998`). GFF3 feature IDs such as `transcript:ENST…` and RefSeq `rna-NM_…` also resolve, as does a RefSeq accession on its own. An unversioned ID that matches more than one annotated version is rejected. The reference build and contig names must match across all inputs. A `.fai` FASTA index is required; prepare it with `samtools faidx reference.fa`. A bgzip VCF with a tabix/CSI index, or indexed BCF, enables regional reading. Unindexed VCFs are streamed with an explicit notice. The annotation is scanned to locate the requested transcript.
+Give the transcript ID as written in the annotation, with or without its version (for example `ENST00000371998.8` or `ENST00000371998`). GFF3 feature IDs such as `transcript:ENST…` and RefSeq `rna-NM_…` also resolve, as does a RefSeq accession on its own. An unversioned ID that matches more than one annotated version is rejected. All inputs must use the same reference build; contig names may differ only by a `chr` prefix. A `.fai` FASTA index is required; prepare it with `samtools faidx reference.fa`. A bgzip VCF with a tabix/CSI index, or indexed BCF, enables regional reading. Unindexed VCFs are streamed with an explicit notice. The annotation is scanned to locate the requested transcript.
 
-Default call thresholds are GQ ≥ 20 and depth ≥ 5. Multi-base gVCF reference blocks require `MIN_DP` for a positive depth threshold: anchor `DP` alone cannot establish depth throughout a block. Single-base records use `DP` (or `MIN_DP` for a reference block). Missing required quality values, missing genotypes, and failed filters produce unknown evidence. Set thresholds with `--min-gq` and `--min-dp`. Setting minimum depth to zero permits a block with only `DP`, explicitly waiving the block-wide depth check; missing quality/depth fields still remain unknown. Multi-sample files require `--sample`.
+Default call thresholds are GQ ≥ 20 and depth ≥ 5. Multi-base gVCF reference blocks require `MIN_DP` for a positive depth threshold: anchor `DP` alone cannot establish depth throughout a block. Single-base records use `DP` (or `MIN_DP` for a reference block). Missing required quality values, missing genotypes, and failed filters produce unknown evidence. Set thresholds with `--min-gq` and `--min-dp`. Setting minimum depth to zero permits a block with only `DP`, explicitly waiving the block-wide depth check; missing quality/depth fields still remain unknown. Multi-sample files require `--sample`. DeepVariant `RefCall` records with a `0/0` genotype count as reference evidence when they pass these thresholds. Contig names may differ between inputs by a `chr` prefix; positions in the report use the VCF's names.
 
 Deletions in gVCFs are handled whichever way the writer records the deleted bases. A reference block that continues through the bases removed by a called deletion is not treated as a conflict, and a `*` spanning-deletion allele is accepted when an upstream called deletion covers it. A `*` allele combined with another alternate allele at the same site is rejected, because placing it requires read-level phasing.
 
@@ -94,7 +94,7 @@ python -m pytest
 python -m build
 ```
 
-See [the model and validation notes](docs/model.md) for details and [the validation record](docs/validation.md) for the checks performed on this first version.
+See [the architecture guide](docs/architecture.md) for how the code is organised, [the model notes](docs/model.md) for interpretation, and [the validation record](docs/validation.md) for the checks performed, including on real HG002 data.
 
 ## Related work
 
