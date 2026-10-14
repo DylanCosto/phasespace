@@ -54,6 +54,18 @@ To keep files small, the embedded result drops each copy's `cds` and `protein` (
 
 `read_evidence(result, bams, fasta)` types each read at the heterozygous calls it covers: SNVs by aligned base, indels by exact match of a flanked window to either expected allele. Typings join into fragments by read name. For each fragment and pair of calls, allele indices i₁ and i₂ (genotype order) give relative orientation i₁ XOR i₂. Block pairs count fragments by majority vote; same-block pairs check the input phase. `add_read_evidence` adds `supported` relationships (≥ 3 fragments, ≥ 90% agreement) and the verdict among the arrangements they allow. The report shows the counts and can apply them as hypotheses tagged "reads".
 
+## `hgvs.py` — c. and p. labels
+
+`coding_change` gives c. labels (exact for substitutions; indels in VCF representation). `protein_changes` describes one copy from its joint sequence. It walks reference and alternate codons using the alignment from `analysis._alignment`, and names substitutions, nonsense, in-frame del/ins/dup/delins (trimmed to the changed residues), frameshifts with the distance to the new stop, stop loss and start loss. `analyze` stores these per copy (`protein_changes`) and, for each variant on its own, in `variants[].effects`.
+
+## `inheritance.py` — parent-of-origin evidence
+
+For each heterozygous child call, the parents' genotypes (at the site, or from a covering gVCF reference block; filters and GQ required, depth when present) decide which allele came from the father when only one assignment fits. Calls inherited from the same parent share a copy, so two calls give relative orientation f₁ XOR f₂. Evidence has the same shape as read evidence and shares `reads.apply_supported`. A relationship counts as supported when every informative pair agrees.
+
+## `linking.py` — `--link-evidence`
+
+Before enumeration, clearly supported read and inheritance relationships merge blocks through a parity union-find, strongest first. Relationships that contradict stronger ones are skipped and reported. Linked calls are rewritten as one phase set, so loci over the block cap can be analysed, and labels and warnings say the arrangements assume this evidence.
+
 ## Tests and fixtures
 
 - `tests/test_inputs.py`, `test_analysis.py`, `test_report.py`, `test_cli.py`: synthetic cases with known answers.

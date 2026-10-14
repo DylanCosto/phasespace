@@ -31,6 +31,10 @@ COLUMNS = ["tier", "gene", "transcript", "selection", "contig", "verdict", "vari
            "parent_supported_relationships", "mendelian_conflicts", "verdict_with_parents", "unknown_cds_bases",
            "cds_bases", "status", "report"]
 
+VARIANT_COLUMNS = ["tier", "gene", "transcript", "variant", "contig", "position", "ref", "alt", "genotype", "phase_set", "block",
+                   "coding_change", "protein_change_alone", "consequence_alone", "splice_region", "gq", "dp",
+                   "read_alleles", "parent_of_origin"]
+
 _worker: dict = {}
 
 
@@ -42,6 +46,39 @@ def _start_worker(settings: dict) -> None:
 
 def _safe(name: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]+", "_", name)[:80]
+
+
+def _variant_rows(row: dict, locus, result: dict | None) -> list[dict]:
+    """One row per called coding variant, with effects alone and any evidence."""
+    analysed = {v["id"]: v for v in (result or {}).get("variants", [])}
+    labels = {block["id"]: (block["label"].split(":", 1)[0] if block["label"].startswith("Linked by") else block["label"])
+              for block in (result or {}).get("blocks", [])}
+    splice = {hit["id"]: hit for hit in locus.splice_region}
+    reads = (result or {}).get("read_evidence", {}).get("variants", {})
+    origin = (result or {}).get("inheritance_evidence", {}).get("variants", {})
+    rows = []
+    for variant in locus.variants:
+        details = analysed.get(variant.id, {})
+        effects = details.get("effects", [])
+        alts = sorted(set(variant.alleles) - {variant.ref})
+        hit = splice.get(variant.id)
+        counts = reads.get(variant.id, {}).get("allele_reads")
+        parent = origin.get(variant.id)
+        rows.append({
+            "tier": row["tier"], "gene": row["gene"], "transcript": row["transcript"], "variant": variant.id,
+            "contig": locus.transcript.contig, "position": variant.pos + 1, "ref": variant.ref, "alt": ",".join(alts),
+            "genotype": ("|" if variant.phased else "/").join(variant.alleles), "phase_set": variant.phase_set or "",
+            "block": labels.get(details.get("block"), "both copies" if variant.gt[0] == variant.gt[1] else ""),
+            "coding_change": "; ".join(e["coding_change"] for e in effects), "protein_change_alone": "; ".join(e["protein_change"] for e in effects),
+            "consequence_alone": "; ".join(",".join(e["consequences"]) for e in effects),
+            "splice_region": f"{hit['where']} {hit['distance']} bp" if hit else "", "gq": variant.gq if variant.gq is not None else "",
+            "dp": variant.dp if variant.dp is not None else "",
+            "read_alleles": " ".join(f"{a}x{n}" for a, n in zip(variant.alleles, counts)) if counts else "",
+            "parent_of_origin": (f"father:{variant.alleles[parent['paternal_allele']]} mother:{variant.alleles[1 - parent['paternal_allele']]}"
+                                 if parent and parent["status"] == "informative" else parent["status"] if parent else ""),
+            **{f"info_{name}": value for name, value in variant.info.items()},
+        })
+    return rows
 
 
 def _scan_one(model: TranscriptModel) -> dict:
@@ -60,7 +97,7 @@ def _scan_one(model: TranscriptModel) -> dict:
                splice_region=len(locus.splice_region),
                info="; ".join(f"{v.id.split(':', 1)[1]} {k}={value}" for v in variants for k, value in v.info.items()))
     if not variants:
-        return {**row, "tier": 4, "verdict": "good", "status": "no called coding variants"}
+        return {**row, "tier": 4, "verdict": "good", "status": "no called coding variants", "_variants": []}
     linked = []
     try:
         if settings["link_evidence"] and sum(v.gt[0] != v.gt[1] for v in variants) > 1:
@@ -69,17 +106,19 @@ def _scan_one(model: TranscriptModel) -> dict:
                                         parents_from=settings["parents_from"], min_gq=settings["min_gq"], min_dp=settings["min_dp"])
         result = analyze(locus, max_blocks=settings["max_blocks"])
     except PhaseSpaceError as exc:
-        return {**row, "tier": 5, "status": f"not analysed: {exc}"}
+        failed = {**row, "tier": 5, "status": f"not analysed: {exc}"}
+        return {**failed, "_variants": _variant_rows(failed, locus, None)}
     if linked:
         from .linking import label_linked
         label_linked(result, linked)
         row["linked_blocks"] = sum(len(group["blocks"]) for group in linked)
-    if settings["reads"] and len(result["blocks"]) > 1:
+    has_het = any(v.gt[0] != v.gt[1] for v in locus.variants)
+    if settings["reads"] and has_het:
         from .reads import add_read_evidence
         evidence = add_read_evidence(result, settings["reads"], settings["fasta"])["read_evidence"]
         row.update(read_fragments=evidence["fragments"], read_supported_relationships=len(evidence["supported"]),
                    verdict_with_reads=evidence["verdict_with"])
-    if settings["parents"] and len(result["blocks"]) > 1:
+    if settings["parents"] and has_het:
         from .inheritance import add_inheritance_evidence
         evidence = add_inheritance_evidence(result, settings["parents_from"], *settings["parents"], settings["min_gq"], settings["min_dp"])["inheritance_evidence"]
         row.update(parent_supported_relationships=len(evidence["supported"]), mendelian_conflicts=evidence["conflicts"],
@@ -96,6 +135,7 @@ def _scan_one(model: TranscriptModel) -> dict:
         name = f"reports/{_safe(model.gene)}_{_safe(model.id)}.html"
         write_report(result, Path(settings["out_dir"]) / name)
         row["report"] = name
+    row["_variants"] = _variant_rows(row, locus, result)
     return row
 
 
@@ -155,6 +195,12 @@ def run_scan(vcf: str, fasta: str, annotation: str, out_dir: str | Path, *, samp
                 if index % 2000 == 0:
                     log(f"  {index:,} / {len(models):,}")
     rows.sort(key=lambda row: (row["tier"], -len(row.get("disruptive", "") or ""), row["gene"]))
+    variant_rows = [variant for row in rows for variant in row.pop("_variants", [])]
+    info_columns = [f"info_{name}" for name in info_fields]
+    with open(out_dir / "variants.tsv", "w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, VARIANT_COLUMNS + info_columns, delimiter="\t", extrasaction="ignore", restval="")
+        writer.writeheader()
+        writer.writerows(variant_rows)
     shown = [row for row in rows if row.get("variants") or row.get("splice_region") or row["tier"] == 5]
     with open(out_dir / "scan.tsv", "w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, COLUMNS, delimiter="\t", extrasaction="ignore", restval="")

@@ -81,7 +81,7 @@ This analyses one representative transcript per protein-coding gene and ranks th
 3. **No reference protein** (often common homozygous missense variants).
 4. **Reference protein kept.**
 
-The scan writes `scan/index.html` (sortable and filterable), `scan.tsv`, `scan.json`, and reports for tiers 1–2 (`--reports all` writes one for every gene with variants). Restrict it to a panel with `--genes CFTR,PAH` or `--genes @panel.txt`. `--phase-from`, thresholds and `--max-blocks` work as for `report`. Genes on contigs absent from the reference or VCF are counted but not listed, so single-chromosome and exome inputs work. A whole-genome GENCODE scan of HG002 chr20 calls takes under 20 seconds on 12 processes.
+The scan writes `scan/index.html` (sortable and filterable), `scan.tsv` (one row per gene), `variants.tsv` (one row per call: its effect alone, genotype, phase, block, splice flag, annotations, read allele counts, parent of origin), `scan.json`, and reports for tiers 1–2 (`--reports all` writes one for every gene with variants). Restrict it to a panel with `--genes CFTR,PAH` or `--genes @panel.txt`. `--phase-from`, thresholds and `--max-blocks` work as for `report`. Genes on contigs absent from the reference or VCF are counted but not listed, so single-chromosome and exome inputs work. A whole-genome GENCODE scan of HG002 chr20 calls takes under 20 seconds on 12 processes.
 
 ### Using phase from WhatsHap, longphase or a trio
 

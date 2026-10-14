@@ -713,13 +713,14 @@
     const tbody = byId("variants-body");
     if (!variants.length) {
       const row = element("tr");
-      const cell = element("td", "", "No called coding variants in the supported input evidence."); cell.colSpan = 9; row.append(cell); tbody.append(row);
+      const cell = element("td", "", "No called coding variants in the supported input evidence."); cell.colSpan = 10; row.append(cell); tbody.append(row);
     }
     variants.forEach(function (variant) {
       const row = element("tr");
       const changes = Array.from(new Set(variant.cds_alleles.filter(function (allele) { return allele.toUpperCase() !== variant.cds_ref.toUpperCase(); }).map(function (allele) { return changeLabel(variant, allele); })));
       const block = variant.block || variant.block_id;
-      [[variant.id + (spliceIds.has(variant.id) ? " · splice region" : ""), "mono"], [changes.join(", "), "mono"], [transcript.contig + ":" + number(variant.pos + 1), "mono"], [variant.ref + " → " + Array.from(new Set(variant.alleles)).join(" / "), "mono"],
+      const alone = (variant.effects || []).map(function (effect) { return effect.protein_change; }).join(", ");
+      [[variant.id + (spliceIds.has(variant.id) ? " · splice region" : ""), "mono"], [changes.join(", "), "mono"], [alone || "—", "mono"], [transcript.contig + ":" + number(variant.pos + 1), "mono"], [variant.ref + " → " + Array.from(new Set(variant.alleles)).join(" / "), "mono"],
         [variant.gt.join(variant.phased ? "|" : "/"), "mono"], [variant.phase_set == null ? "—" : variant.phase_set, "mono"], [block ? blockName(block) : "Both copies", ""],
         [variant.gq == null ? "—" : number(variant.gq), "num"], [variant.dp == null ? "—" : number(variant.dp), "num"]].forEach(function (cell) {
         row.append(element("td", cell[1], cell[0]));

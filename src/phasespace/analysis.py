@@ -13,7 +13,7 @@ from hashlib import sha256
 from itertools import combinations, product
 import json
 
-from .hgvs import protein_changes
+from .hgvs import coding_change, protein_changes
 from .models import Locus, PhaseSpaceError, Variant
 
 
@@ -274,6 +274,20 @@ def _haplotype(
     }
 
 
+def _effects(reference: str, variant: Variant, reference_translation: tuple[str, int | None, str]) -> list[dict]:
+    """Each alternate allele's effect on its own, for comparison with joint copies."""
+    effects = []
+    for index, allele in enumerate(variant.cds_alleles):
+        allele = allele.upper()
+        if allele == variant.cds_ref.upper() or any(e["cds_allele"] == allele for e in effects):
+            continue
+        alone = _haplotype(reference, [(variant, allele)], reference_translation)
+        effects.append({"allele": variant.alleles[index].upper(), "cds_allele": allele,
+                        "coding_change": coding_change(variant.cds_start, variant.cds_ref, allele),
+                        "protein_change": "; ".join(alone["protein_changes"]), "consequences": alone["consequences"]})
+    return effects
+
+
 def _outcome_key(haplotypes: list[dict]) -> str:
     payload = json.dumps(sorted(h["cds"] for h in haplotypes), separators=(",", ":"))
     return "sha256:" + sha256(payload.encode("ascii")).hexdigest()
@@ -388,7 +402,7 @@ def analyze(locus: Locus, max_blocks: int = 8) -> dict:
         "schema_version": 1,
         "sample": locus.sample,
         "transcript": asdict(locus.transcript),
-        "variants": [dict(asdict(v), block=membership.get(v.id)) for v in variants],
+        "variants": [dict(asdict(v), block=membership.get(v.id), effects=_effects(reference, v, reference_translation)) for v in variants],
         "evidence": [asdict(e) for e in locus.evidence],
         "warnings": list(dict.fromkeys(warnings)),
         "source": locus.source,

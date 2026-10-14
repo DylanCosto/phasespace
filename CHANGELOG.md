@@ -12,6 +12,11 @@
 - Docker image, nf-core-style Nextflow modules with an example pipeline, MIT license.
 - Real-data regression fixture (GIAB HG002 chr20) and validation on DeepVariant, GATK and GIAB inputs, HiFi and Illumina reads, and trio phasing.
 
+- HGVS-style protein changes per gene copy (`p.Gln8Ter`, `p.Val7_Leu8del`, `p.Lys2AsnfsTer2`), taken from the jointly edited sequence. Two calls in one codon give the amino acid actually made. Each variant's effect alone (c., p., consequence) is listed alongside.
+- `--parents FATHER,MOTHER` (`--parents-from`): inheritance evidence. Shows which parent passed on each allele, as observed relationships with an apply button. Mendelian conflicts are flagged.
+- `--link-evidence`: merge blocks that reads or parents clearly link before enumerating, so loci over the block cap (e.g. SIRPA with 20 unphased calls) can be analysed.
+- `scan` writes `variants.tsv`: one row per call, with effects alone, phase, block, splice flag, annotations, read allele counts and parent of origin.
+
 ### Changed
 - The redesigned report leads with a protein-level verdict and shows the two copies side by side. Large analyses embed edits instead of sequences: 1.6 MB instead of 44 MB at the block cap.
 - GTF `stop_codon` features are joined to the CDS, so stop loss is assessed for GENCODE and Ensembl GTFs.
