@@ -147,3 +147,12 @@ for (const item of JSON.parse(require('node:fs').readFileSync(process.argv[2], '
 }
 """
     subprocess.run(["node", "-e", test, str(javascript), str(data)], check=True, capture_output=True, text=True)
+
+
+def test_scan_requires_an_indexed_vcf(tmp_path):
+    import pysam
+    plain = tmp_path / "calls.vcf"
+    with pysam.VariantFile(str(DATA / "pacbio.HG002.vcf.gz")) as source, pysam.VariantFile(str(plain), "w", header=source.header) as out:
+        for record in source:
+            out.write(record)
+    assert main(["scan", "--vcf", str(plain), "--fasta", str(FASTA), "--annotation", str(GTF), "--out-dir", str(tmp_path / "scan")]) == 2

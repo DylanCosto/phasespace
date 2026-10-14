@@ -107,6 +107,10 @@ def run_scan(vcf: str, fasta: str, annotation: str, out_dir: str | Path, *, samp
         source = probe.source
         references = set(probe.fasta.references)
         declared = set(probe.vcf.header.contigs)
+        try:
+            probe.vcf.fetch(next(iter(declared)) if declared else models[0].contig, 0, 1)
+        except (ValueError, OSError, StopIteration) as exc:
+            raise PhaseSpaceError("scan needs an indexed VCF (bgzip + tabix/CSI, or indexed BCF); without an index every gene would re-read the whole file.") from exc
     # Inputs limited to some contigs (one chromosome, an exome region set) are
     # normal; genes elsewhere are counted, not reported as failures.
     present = [m for m in models if _resolve_contig(m.contig, references) and (not declared or _resolve_contig(m.contig, declared))]
