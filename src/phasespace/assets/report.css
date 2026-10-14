@@ -317,6 +317,20 @@ h1 { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; font-
 .informative-button .bar { grid-column: 1 / -1; height: 4px; border-radius: 2px; background: var(--surface-3); overflow: hidden; }
 .informative-button .bar span { display: block; height: 100%; background: var(--ink-2); border-radius: 2px; }
 
+.reads-section { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--hair); }
+.reads-section h3 { font-size: 13px; font-weight: 650; display: flex; align-items: center; gap: 8px; }
+.tag-observed { background: var(--good-soft); color: var(--good-text); font-size: 10.5px; padding: 1px 7px; }
+.read-pairs { display: grid; gap: 8px; margin: 10px 0 8px; }
+.read-pair { border: 1px solid var(--border); border-radius: 10px; padding: 9px 12px; display: grid; gap: 6px; background: var(--surface); }
+.read-pair-top { display: flex; justify-content: space-between; gap: 8px; font-size: 13px; }
+.read-pair-top strong { font-weight: 650; }
+.read-pair-top span { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.read-bar { display: flex; gap: 2px; height: 8px; }
+.read-bar span { border-radius: 3px; min-width: 2px; }
+.read-bar .same { background: var(--ink-2); }
+.read-bar .opposite { background: var(--axis); }
+.read-pair.supported { border-color: color-mix(in srgb, var(--good) 45%, transparent); }
+.relation.from-reads { background: var(--good-soft); color: var(--good-text); border-color: transparent; }
 /* Outcome gallery */
 .mini-stats { display: flex; gap: 14px; font-size: 13px; color: var(--muted); flex-wrap: wrap; }
 .mini-stats strong { color: var(--ink); font-weight: 650; font-variant-numeric: tabular-nums; }

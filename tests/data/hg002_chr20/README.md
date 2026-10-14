@@ -19,5 +19,6 @@ Sources (all public):
 - `giab.HG002.vcf.gz`: GIAB HG002 NISTv4.2.1 GRCh38 benchmark VCF (unphased, variant-only).
 - `trio.HG002.vcf.gz`: the `deepvariant` gVCF with phase from transmission. The DeepTrio HG002, HG003 and HG004 gVCFs from the same run were merged (`bcftools merge --gvcf`), genotypes with GQ < 20 set missing, phased with WhatsHap 2.8 `phase --ped` without reads, and copied back by `scripts/transfer_phase.py`. Sites heterozygous in all three samples stay unphased.
 - `whatshap.HG002.vcf.gz`: the WhatsHap output itself (variant-only, all three samples), for `--phase-from`.
+- `hifi.HG002.bam`, `illumina.HG002.bam`: GIAB HG002 PacBio HiFi Revio 48x and NHGRI Illumina 60x GRCh38 alignments, reads over the coding exons only, auxiliary tags removed, header reduced to chr20.
 - `GRCh38.chr20.masked.fa.gz`: chr20 of the GRCh38 no-alt analysis set used by DeepVariant.
 - `gencode.v46.gtf`: GENCODE v46 comprehensive annotation. `ensembl112.gff3`: Ensembl 112 chr20 GFF3, contig renamed from `20` to `chr20`.

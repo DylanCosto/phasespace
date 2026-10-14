@@ -26,7 +26,8 @@ from .report import _script_json, write_report
 
 TIERS = {1: "Phase decides", 2: "No reference protein, disruptive", 3: "No reference protein", 4: "Reference protein kept"}
 COLUMNS = ["tier", "gene", "transcript", "selection", "contig", "verdict", "variants", "heterozygous", "phased",
-           "blocks", "arrangements", "protein_outcomes", "changes", "disruptive", "splice_region", "info", "unknown_cds_bases",
+           "blocks", "arrangements", "protein_outcomes", "changes", "disruptive", "splice_region", "info",
+           "read_fragments", "read_supported_relationships", "verdict_with_reads", "unknown_cds_bases",
            "cds_bases", "status", "report"]
 
 _worker: dict = {}
@@ -63,6 +64,11 @@ def _scan_one(model: TranscriptModel) -> dict:
         result = analyze(locus, max_blocks=settings["max_blocks"])
     except PhaseSpaceError as exc:
         return {**row, "tier": 5, "status": f"not analysed: {exc}"}
+    if settings["reads"] and len(result["blocks"]) > 1:
+        from .reads import add_read_evidence
+        evidence = add_read_evidence(result, settings["reads"], settings["fasta"])["read_evidence"]
+        row.update(read_fragments=evidence["fragments"], read_supported_relationships=len(evidence["supported"]),
+                   verdict_with_reads=evidence["verdict_with_reads"])
     summary = result["summary"]
     row.update(tier=summary["tier"], verdict=summary["verdict"], blocks=len(result["blocks"]),
                arrangements=result["scenario_count"], protein_outcomes=result["protein_outcome_count"],
@@ -78,7 +84,7 @@ def _scan_one(model: TranscriptModel) -> dict:
 
 def run_scan(vcf: str, fasta: str, annotation: str, out_dir: str | Path, *, sample: str | None = None,
              genes: set[str] | None = None, phase_from: str | None = None, info_fields: tuple[str, ...] = (),
-             info_from: str | None = None, min_gq: float = 20, min_dp: int = 5,
+             info_from: str | None = None, reads: list[str] | None = None, min_gq: float = 20, min_dp: int = 5,
              max_blocks: int = 8, reports: str = "candidates", threads: int = 1, log=None) -> dict:
     check_thresholds(min_gq, min_dp)
     check_max_blocks(max_blocks)
@@ -94,7 +100,7 @@ def run_scan(vcf: str, fasta: str, annotation: str, out_dir: str | Path, *, samp
     if not models:
         raise PhaseSpaceError("No supported coding transcripts were found to scan.")
     settings = {"vcf": str(vcf), "fasta": str(fasta), "sample": sample, "min_gq": min_gq, "min_dp": min_dp,
-                "phase_from": phase_from, "info_fields": tuple(info_fields), "info_from": info_from, "max_blocks": max_blocks, "reports": reports, "out_dir": str(out_dir)}
+                "phase_from": phase_from, "info_fields": tuple(info_fields), "info_from": info_from, "reads": list(reads or []), "max_blocks": max_blocks, "reports": reports, "out_dir": str(out_dir)}
     # Fail fast on unreadable inputs or an ambiguous sample before starting workers.
     with LocusReader(vcf, fasta, sample, min_gq, min_dp, phase_from, info_fields, info_from) as probe:
         settings["sample"] = sample = probe.sample

@@ -41,6 +41,14 @@ Inputs (all public): DeepVariant 1.10 DeepTrio gVCFs for HG002 (a PacBio chr20 r
 - **RefCall and contig names.** Counting DeepVariant `RefCall` `0/0` records as reference evidence reduced unknown coding bases across the chr20 sweep by 15% for one gVCF (5,936 to 5,023) and 13% for the other (2,674 to 2,333). Variants, blocks and arrangements were unchanged in all 2,084 runs. The Ensembl GFF3 with its original `20` contig name gives the same evidence as the `chr20` GTF. The full sweep took 19 s on 14 processes, down from 367 s.
 - **Regression fixture.** `tests/data/hg002_chr20` (424 KB, made by `scripts/make_hg002_fixture.py`) keeps real records for six of these transcripts (five plus SIRPA), including the trio-phased gVCF, in true chr20 coordinates. `tests/test_hg002.py` checks each across three inputs and both annotation formats.
 
+## Read evidence — GIAB HG002 reads (2026-10-14)
+
+Reads over the fixture transcripts were taken by region from the GIAB HG002 PacBio HiFi Revio 48x and NHGRI Illumina 60x GRCh38 alignments. They are in `tests/data/hg002_chr20` with auxiliary tags removed.
+
+- **Agreement with trio phasing.** Wherever both apply, read-supported orientations agree with transmission phasing. SPINT3 (three SNVs within 80 bp): HiFi 53–0, 52–0 and 51–0 fragments; Illumina 63–0, 41–0 and 34–0. Both select the single arrangement chosen by the trio, in which both copies carry a missense change. CDC25B (SNVs 1.4–5.5 kb apart): HiFi 28–0, 19–0 and 15–0. Illumina pairs span none of them.
+- **Within a phase set.** Across SIRPA's 19 trio-phased variants, HiFi reads agreed with the trio phase in 6,969 of 6,969 variant-pair observations, and Illumina in 1,261 of 1,261. Reads also place the one variant the trio left unphased (HiFi 40–2 fragments, Illumina 17–0).
+- **Counting.** Block pairs count fragments: each read or read pair votes once, by the majority of its variant pairs. Mates are joined by read name, and a site where mates disagree is dropped. Synthetic BAM tests cover SNV and deletion typing, mate joining, MAPQ filtering and the support threshold.
+
 ## Important scope
 
 These tests establish behavior for the supported computational model. They do not establish biological function or clinical performance. Transcript annotation completeness, genotype quality, the correct reference build and supported genetic code remain necessary inputs. Missing evidence never becomes an inferred reference call.

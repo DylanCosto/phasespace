@@ -15,6 +15,8 @@
   ];
   const state = { tier: "all", query: "", sort: { key: "tier", dir: 1 }, limit: 300 };
   const rows = data.rows || [];
+  const VERDICTS = { good: "Reference protein kept", none: "No reference protein", mixed: "Phase still decides", conflicting: "Reads conflict" };
+  if (rows.some(function (row) { return row.verdict_with_reads; })) COLUMNS.splice(7, 0, { key: "verdict_with_reads", label: "With reads" });
 
   function element(tag, className, content) {
     const node = document.createElement(tag);
@@ -114,7 +116,16 @@
       }
       const cell = function (value, className) { return element("td", className, value === undefined || value === "" ? "—" : value); };
       tr.append(tier, gene, cell(row.transcript, "mono"), cell(row.heterozygous, "num"), cell(row.variants, "num"), cell(row.arrangements === undefined ? "" : number(row.arrangements), "num"),
-        cell(row.protein_outcomes, "num"), changes, cell(row.unknown_cds_bases, "num"));
+        cell(row.protein_outcomes, "num"));
+      if (COLUMNS.some(function (column) { return column.key === "verdict_with_reads"; })) {
+        const reads = element("td");
+        if (row.verdict_with_reads) {
+          reads.append(element("span", "tier-badge tier-" + ({ good: 4, none: 3, mixed: 1, conflicting: 5 }[row.verdict_with_reads]), VERDICTS[row.verdict_with_reads]));
+          reads.title = row.read_supported_relationships + " read-supported relationship(s) from " + row.read_fragments + " informative fragments";
+        } else reads.textContent = "—";
+        tr.append(reads);
+      }
+      tr.append(changes, cell(row.unknown_cds_bases, "num"));
       body.append(tr);
     });
     byId("scan-empty").hidden = visible.length > 0;

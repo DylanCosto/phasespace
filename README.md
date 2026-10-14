@@ -48,6 +48,12 @@ Deletions in gVCFs are handled whichever way the writer records the deleted base
 
 Use `--gene SYMBOL` (or a gene ID) instead of `--transcript`. PhaseSpace picks the gene's MANE Select transcript, then its Ensembl canonical transcript, then its RefSeq Select transcript, and says which it chose. If none is tagged, it lists the transcripts so you can pick one with `--transcript`.
 
+### Read evidence from BAM/CRAM
+
+Add `--reads sample.bam` (repeatable; CRAM uses `--fasta`) to `report` or `scan`. For every read or read pair that covers two heterozygous calls in different blocks, PhaseSpace records which alleles it carries. That shows whether the blocks share an orientation (alternate alleles on one copy) or not. Each fragment counts once per block pair. SNVs use the aligned base (base quality ≥ 13), and indels compare the read with both expected sequences across a flanked window. Reads need MAPQ ≥ 20 and must not be secondary, duplicate or QC-fail.
+
+The report shows these as **observed counts**, kept separate from hypotheses. A relationship is "supported" with at least 3 fragments and 90% agreement, and **Apply read-supported relationships** adds them as hypotheses tagged "reads". Within existing phase blocks, the report also shows how often reads agree with the input phase. Scans add `verdict_with_reads`. Nothing is converted into a probability, and the input calls never change. Long reads matter most: on HG002, HiFi reads resolved CDC25B variants 1–6 kb apart that Illumina pairs could not reach.
+
 ### Show annotations you already have
 
 `--info CLNSIG,AF` shows those INFO fields for each variant in reports and scans. By default they come from the main VCF. `--info-from clinvar.vcf.gz` reads them from a separate indexed VCF, such as ClinVar or gnomAD sites, matching calls by position, REF and ALT. Contig names may differ by a `chr` prefix. Per-allele fields (`Number=A` or `R`) are taken for the called alternate alleles. Nothing is looked up online.

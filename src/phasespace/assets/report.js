@@ -180,7 +180,13 @@
   const scenarios = data.scenarios || [];
   const variants = data.variants || [];
   const spliceRegion = data.splice_region || [];
+  const readEvidence = data.read_evidence || null;
   const infoText = function (variant) { return Object.keys(variant.info || {}).map(function (key) { return key + "=" + variant.info[key]; }).join("  ·  "); };
+  const readText = function (variant) {
+    const counts = readEvidence && readEvidence.variants[variant.id];
+    if (!counts) return "";
+    return "\nReads: " + variant.alleles.map(function (allele, index) { return (allele.length > 8 ? allele.slice(0, 7) + "…" : allele) + " ×" + counts.allele_reads[index]; }).join(" · ");
+  };
   const hasInfo = variants.some(function (variant) { return Object.keys(variant.info || {}).length > 0; });
   const spliceIds = new Set(spliceRegion.map(function (hit) { return hit.id; }));
   const proteinScale = sharedProteinScale(scenarios, data.reference_protein_length);
@@ -354,6 +360,11 @@
       detail = number(verdict.keep) + " of " + number(verdict.total) + " arrangements " + (verdict.keep === 1 ? "keeps" : "keep") + " one; " + number(lost) + (lost === 1 ? " changes" : " change") + " the protein on both copies. Resolving the block relationships would tell them apart.";
     }
     if (verdict.tone !== "empty" && evidence.counts.unknown > 0) detail += " Applies to included calls only: " + plural(evidence.counts.unknown, "coding base") + (evidence.counts.unknown === 1 ? " lacks" : " lack") + " evidence.";
+    if (readEvidence && verdict.tone !== "empty" && readEvidence.supported.length && !state.constraints.some(function (c) { return c.source === "reads"; })) {
+      const outcome = { good: "a copy keeps the reference protein in every remaining arrangement", none: "no remaining arrangement keeps a reference-protein copy",
+        mixed: "phase still decides", conflicting: "the read-supported relationships contradict each other" }[readEvidence.verdict_with_reads];
+      detail += " Reads clearly support " + plural(readEvidence.supported.length, "block relationship") + "; with them applied, " + outcome + ".";
+    }
     if (verdict.tone !== "empty" && spliceRegion.length) detail += " " + plural(spliceRegion.length, "splice-region variant") + " not modelled; splicing could change this.";
     text("verdict-title", title);
     text("verdict-detail", detail);
@@ -466,7 +477,7 @@
       const center = pct((variant.cds_start + Math.max(variant.cds_end, variant.cds_start + 1)) / 2);
       const pin = element("span", "pin");
       pin.style.left = center + "%";
-      const labelNode = tip(element("span", "pin-label" + (spliceIds.has(variant.id) ? " splice" : ""), name), name + "\n" + variant.id + "\nGT " + variant.gt.join(variant.phased ? "|" : "/") + (variant.block ? " · " + blockName(variant.block) : " · on both copies") + (spliceIds.has(variant.id) ? "\nSplice region: effect on splicing not modelled" : "") + (infoText(variant) ? "\n" + infoText(variant) : ""));
+      const labelNode = tip(element("span", "pin-label" + (spliceIds.has(variant.id) ? " splice" : ""), name), name + "\n" + variant.id + "\nGT " + variant.gt.join(variant.phased ? "|" : "/") + (variant.block ? " · " + blockName(variant.block) : " · on both copies") + (spliceIds.has(variant.id) ? "\nSplice region: effect on splicing not modelled" : "") + (infoText(variant) ? "\n" + infoText(variant) : "") + readText(variant));
       pin.append(labelNode, element("span", "pin-stem"));
       pins.append(pin);
       const head = element("span", "pin-head");
@@ -706,13 +717,48 @@
     state.constraints.forEach(function (constraint, index) {
       const row = element("li");
       const label = element("span", "", blockName(constraint.a) + " ↔ " + blockName(constraint.b));
-      label.append(element("span", "relation", constraint.parity === 0 ? "same" : "opposite"));
+      label.append(element("span", "relation" + (constraint.source === "reads" ? " from-reads" : ""), (constraint.parity === 0 ? "same" : "opposite") + (constraint.source === "reads" ? " · reads" : "")));
       const remove = element("button", "remove-constraint", "×");
       remove.type = "button";
       remove.setAttribute("aria-label", "Remove hypothesis between " + blockName(constraint.a) + " and " + blockName(constraint.b));
       remove.addEventListener("click", function () { state.constraints.splice(index, 1); update(); });
       row.append(label, remove);
       list.append(row);
+    });
+  }
+
+  function applyConstraint(constraint) {
+    const existing = state.constraints.findIndex(function (c) { return (c.a === constraint.a && c.b === constraint.b) || (c.a === constraint.b && c.b === constraint.a); });
+    if (existing < 0) state.constraints.push(constraint); else state.constraints[existing] = constraint;
+  }
+
+  function renderReads() {
+    if (!readEvidence || !blocks.length) return;
+    byId("reads-section").hidden = false;
+    const supported = new Set(readEvidence.supported.map(function (c) { return c.a + "|" + c.b; }));
+    const container = byId("read-pairs");
+    if (!readEvidence.pairs.length) container.append(element("p", "help", "No read covers two different blocks with clear alleles at both."));
+    readEvidence.pairs.forEach(function (pair) {
+      const card = element("div", "read-pair" + (supported.has(pair.block_a + "|" + pair.block_b) ? " supported" : ""));
+      const top = element("div", "read-pair-top");
+      top.append(element("strong", "", blockName(pair.block_a) + " ↔ " + blockName(pair.block_b)), element("span", "", number(pair.same) + " same · " + number(pair.opposite) + " opposite"));
+      const bar = element("div", "read-bar");
+      const same = element("span", "same"); same.style.flex = String(pair.same || 0.0001);
+      const opposite = element("span", "opposite"); opposite.style.flex = String(pair.opposite || 0.0001);
+      bar.append(same, opposite);
+      tip(card, pair.variant_pairs.map(function (vp) { return vp.a + " ↔ " + vp.b + ": " + vp.same + " same, " + vp.opposite + " opposite"; }).join("\n"));
+      card.append(top, bar);
+      container.append(card);
+    });
+    const within = readEvidence.within_blocks;
+    const total = within.agree + within.disagree;
+    text("read-within", total ? "Within blocks, reads agree with the input phase in " + number(within.agree) + " of " + number(total) + " observations." : "");
+    text("read-rule", "Supported means at least " + readEvidence.thresholds.min_reads + " fragments, " + Math.round(100 * readEvidence.thresholds.min_fraction) + "% agreeing. From " + readEvidence.files.join(", ") + " (" + plural(readEvidence.fragments, "informative fragment") + ").");
+    const apply = byId("apply-reads");
+    apply.disabled = !readEvidence.supported.length;
+    apply.addEventListener("click", function () {
+      readEvidence.supported.forEach(function (c) { applyConstraint({ a: c.a, b: c.b, parity: c.parity, source: "reads" }); });
+      update();
     });
   }
 
@@ -875,6 +921,7 @@
   window.addEventListener("resize", function () { cancelAnimationFrame(frame); frame = requestAnimationFrame(layoutPins); });
   setupTooltip();
   renderInformative();
+  renderReads();
   validatePair();
   update();
 })();

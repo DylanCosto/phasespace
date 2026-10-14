@@ -50,6 +50,10 @@ To keep files small, the embedded result drops each copy's `cds` and `protein` (
 
 `run_scan` takes the catalogue, drops genes on contigs absent from the inputs, and loads and analyses each gene in worker processes. Each worker keeps one `LocusReader` open. `analysis.summarize` gives the protein-level verdict and tier, matching the report's headline; a Node test checks that they agree. Outputs are `scan.tsv`, `scan.json`, `index.html` (from `assets/scan.*`, with the same safety rules as reports) and `reports/`.
 
+## `reads.py` — read-backed evidence
+
+`read_evidence(result, bams, fasta)` types each read at the heterozygous calls it covers: SNVs by aligned base, indels by exact match of a flanked window to either expected allele. Typings join into fragments by read name. For each fragment and pair of calls, allele indices i₁ and i₂ (genotype order) give relative orientation i₁ XOR i₂. Block pairs count fragments by majority vote; same-block pairs check the input phase. `add_read_evidence` adds `supported` relationships (≥ 3 fragments, ≥ 90% agreement) and the verdict among the arrangements they allow. The report shows the counts and can apply them as hypotheses tagged "reads".
+
 ## Tests and fixtures
 
 - `tests/test_inputs.py`, `test_analysis.py`, `test_report.py`, `test_cli.py`: synthetic cases with known answers.
