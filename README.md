@@ -55,6 +55,10 @@ Add `--reads sample.bam` (repeatable; CRAM uses `--fasta`) to `report` or `scan`
 
 The report shows these as **observed counts**, kept separate from hypotheses. A relationship is "supported" with at least 3 fragments and 90% agreement, and **Apply read-supported relationships** adds them as hypotheses tagged "reads". Within existing phase blocks, the report also shows how often reads agree with the input phase. Scans add `verdict_with_reads`. Nothing is converted into a probability, and the input calls never change. Long reads matter most: on HG002, HiFi reads resolved CDC25B variants 1–6 kb apart that Illumina pairs could not reach.
 
+### Inheritance evidence from parents
+
+`--parents FATHER,MOTHER` (sample names; `--parents-from trio.vcf.gz` if they are not in the main VCF) works out which parent passed on each allele of the child's heterozygous calls. Calls whose alleles came from the same parent sit on one copy. A site is informative when only one assignment fits the parents' genotypes. Sites where both parents are heterozygous stay open, and impossible combinations are counted as Mendelian conflicts and never used. Parents' genotypes need passing filters and GQ ≥ `--min-gq`. Depth is checked when present; merged trio files often lack it for genotypes filled from gVCF blocks. Missing parental sites can come from gVCF reference blocks. As with reads, the report shows this as observed evidence with an **Apply inherited relationships** button, and scans add `verdict_with_parents` and `mendelian_conflicts`.
+
 ### Show annotations you already have
 
 `--info CLNSIG,AF` shows those INFO fields for each variant in reports and scans. By default they come from the main VCF. `--info-from clinvar.vcf.gz` reads them from a separate indexed VCF, such as ClinVar or gnomAD sites, matching calls by position, REF and ALT. Contig names may differ by a `chr` prefix. Per-allele fields (`Number=A` or `R`) are taken for the called alternate alleles. Nothing is looked up online.

@@ -135,29 +135,33 @@ def read_evidence(result: dict, read_paths: list[str | Path], fasta_path: str | 
     return evidence
 
 
-def supported_constraints(evidence: dict, min_reads: int = 3, min_fraction: float = 0.9) -> list[dict]:
-    """Block relationships the reads clearly support: at least ``min_reads``
-    informative fragments with at least ``min_fraction`` agreeing."""
+def supported_constraints(evidence: dict, min_count: int = 3, min_fraction: float = 0.9) -> list[dict]:
+    """Block relationships the evidence clearly supports: at least ``min_count``
+    observations with at least ``min_fraction`` agreeing."""
     constraints = []
     for pair in evidence.get("pairs", []):
         total = pair["same"] + pair["opposite"]
         majority = max(pair["same"], pair["opposite"])
-        if total >= min_reads and majority / total >= min_fraction:
+        if total >= min_count and majority / total >= min_fraction:
             constraints.append({"a": pair["block_a"], "b": pair["block_b"], "parity": 0 if pair["same"] >= pair["opposite"] else 1})
     return constraints
+
+
+def apply_supported(result: dict, evidence: dict, min_count: int, min_fraction: float) -> dict:
+    """Add the supported relationships and the verdict among arrangements they allow."""
+    from .analysis import summarize
+    supported = supported_constraints(evidence, min_count, min_fraction)
+    compatible = [s for s in result["scenarios"]
+                  if all(s["orientations"].get(c["a"], 0) ^ s["orientations"].get(c["b"], 0) == c["parity"] for c in supported)]
+    evidence.update(supported=supported, thresholds={"min_count": min_count, "min_fraction": min_fraction},
+                    compatible_arrangements=len(compatible),
+                    verdict_with=summarize({"scenarios": compatible})["verdict"] if compatible else "conflicting")
+    return evidence
 
 
 def add_read_evidence(result: dict, read_paths: list[str | Path], fasta_path: str | Path,
                       min_reads: int = 3, min_fraction: float = 0.9) -> dict:
     """Attach read evidence, the relationships it clearly supports, and the
     verdict among arrangements consistent with them. Input calls are unchanged."""
-    from .analysis import summarize
-    evidence = read_evidence(result, read_paths, fasta_path)
-    supported = supported_constraints(evidence, min_reads, min_fraction)
-    compatible = [s for s in result["scenarios"]
-                  if all(s["orientations"].get(c["a"], 0) ^ s["orientations"].get(c["b"], 0) == c["parity"] for c in supported)]
-    evidence.update(supported=supported, thresholds={"min_reads": min_reads, "min_fraction": min_fraction},
-                    compatible_arrangements=len(compatible),
-                    verdict_with_reads=summarize({"scenarios": compatible})["verdict"] if compatible else "conflicting")
-    result["read_evidence"] = evidence
+    result["read_evidence"] = apply_supported(result, read_evidence(result, read_paths, fasta_path), min_reads, min_fraction)
     return result

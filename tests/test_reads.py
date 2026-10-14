@@ -120,7 +120,7 @@ def test_verdict_with_reads_and_conflicts(locus_files, tmp_path):
     add_read_evidence(result, [write_bam(tmp_path / "cis.bam", reads)], fasta)
     evidence = result["read_evidence"]
     assert {(c["a"], c["b"], c["parity"]) for c in evidence["supported"]} == {("block-1", "block-2", 0), ("block-1", "block-3", 1), ("block-2", "block-3", 1)}
-    assert evidence["compatible_arrangements"] == 1 and evidence["thresholds"] == {"min_reads": 3, "min_fraction": 0.9}
+    assert evidence["compatible_arrangements"] == 1 and evidence["thresholds"] == {"min_count": 3, "min_fraction": 0.9}
     # Below the support threshold nothing is applied.
     few = analysed(locus_files)
     add_read_evidence(few, [write_bam(tmp_path / "two.bam", reads[:2])], fasta)
@@ -139,7 +139,7 @@ def test_real_reads_resolve_spint3_as_trio_phasing_does(tech, expected):
     add_read_evidence(result, [DATA / f"{tech}.HG002.bam"], FASTA)
     evidence = result["read_evidence"]
     assert [(p["same"], p["opposite"]) for p in evidence["pairs"]] == expected
-    assert evidence["compatible_arrangements"] == 1 and evidence["verdict_with_reads"] == "none"
+    assert evidence["compatible_arrangements"] == 1 and evidence["verdict_with"] == "none"
     supported = evidence["supported"]
     chosen = [s for s in result["scenarios"] if all(s["orientations"][c["a"]] ^ s["orientations"][c["b"]] == c["parity"] for c in supported)]
     trio = real("trio", "ENST00000217428.7")
@@ -166,7 +166,7 @@ def test_cli_reads_in_report_and_scan(tmp_path):
     data = tmp_path / "spint3.json"
     common = ["--vcf", str(DATA / "deepvariant.HG002.vcf.gz"), "--fasta", str(FASTA), "--annotation", str(GTF), "--reads", str(DATA / "hifi.HG002.bam")]
     assert main(["report", *common, "--gene", "SPINT3", "--out", str(tmp_path / "spint3.html"), "--json", str(data)]) == 0
-    assert json.loads(data.read_text())["read_evidence"]["verdict_with_reads"] == "none"
+    assert json.loads(data.read_text())["read_evidence"]["verdict_with"] == "none"
     assert main(["scan", *common, "--genes", "SPINT3,CDC25B", "--threads", "1", "--out-dir", str(tmp_path / "scan")]) == 0
     rows = {row["gene"]: row for row in csv.DictReader(open(tmp_path / "scan" / "scan.tsv"), delimiter="\t")}
     assert (rows["SPINT3"]["verdict"], rows["SPINT3"]["verdict_with_reads"], rows["SPINT3"]["read_supported_relationships"]) == ("mixed", "none", "3")

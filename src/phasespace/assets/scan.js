@@ -17,6 +17,7 @@
   const rows = data.rows || [];
   const VERDICTS = { good: "Reference protein kept", none: "No reference protein", mixed: "Phase still decides", conflicting: "Reads conflict" };
   if (rows.some(function (row) { return row.verdict_with_reads; })) COLUMNS.splice(7, 0, { key: "verdict_with_reads", label: "With reads" });
+  if (rows.some(function (row) { return row.verdict_with_parents; })) COLUMNS.splice(7, 0, { key: "verdict_with_parents", label: "With parents" });
 
   function element(tag, className, content) {
     const node = document.createElement(tag);
@@ -123,14 +124,17 @@
       const cell = function (value, className) { return element("td", className, value === undefined || value === "" ? "—" : value); };
       tr.append(tier, gene, cell(row.transcript, "mono"), cell(row.heterozygous, "num"), cell(row.variants, "num"), cell(row.arrangements === undefined ? "" : number(row.arrangements), "num"),
         cell(row.protein_outcomes, "num"));
-      if (COLUMNS.some(function (column) { return column.key === "verdict_with_reads"; })) {
-        const reads = element("td");
-        if (row.verdict_with_reads) {
-          reads.append(element("span", "tier-badge tier-" + ({ good: 4, none: 3, mixed: 1, conflicting: 5 }[row.verdict_with_reads]), VERDICTS[row.verdict_with_reads]));
-          reads.title = row.read_supported_relationships + " read-supported relationship(s) from " + row.read_fragments + " informative fragments";
-        } else reads.textContent = "—";
-        tr.append(reads);
-      }
+      [["verdict_with_parents", function () { return row.parent_supported_relationships + " inherited relationship(s); " + row.mendelian_conflicts + " Mendelian conflict(s)"; }],
+       ["verdict_with_reads", function () { return row.read_supported_relationships + " read-supported relationship(s) from " + row.read_fragments + " informative fragments"; }]].forEach(function (spec) {
+        if (!COLUMNS.some(function (column) { return column.key === spec[0]; })) return;
+        const cellNode = element("td");
+        const value = row[spec[0]];
+        if (value) {
+          cellNode.append(element("span", "tier-badge tier-" + ({ good: 4, none: 3, mixed: 1, conflicting: 5 }[value]), VERDICTS[value]));
+          cellNode.title = spec[1]();
+        } else cellNode.textContent = "—";
+        tr.append(cellNode);
+      });
       tr.append(changes, cell(row.unknown_cds_bases, "num"));
       body.append(tr);
     });
