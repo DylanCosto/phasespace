@@ -185,7 +185,8 @@ def _without_deleted_tails(raw: list[Evidence], tails: list[tuple[int, int]]) ->
     """Drop reference calls over bases that a called deletion removes.
 
     Some gVCF writers continue reference blocks through the bases deleted on
-    one copy. (DeepVariant 1.10 does not; it starts the next block after them.) The deletion record already carries
+    one copy. (DeepVariant 1.10 and GATK 4 HaplotypeCaller do not; both start
+    the next block after them, as checked on HG002.) The deletion record already carries
     that span as variant evidence, so these blocks are not conflicting calls.
     The anchor base is kept: a reference block covering it remains a conflict.
     """
