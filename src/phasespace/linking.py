@@ -98,6 +98,7 @@ def label_linked(result: dict, info: list[dict]) -> dict:
         name = block["label"].removeprefix("Phase set ")
         if name in by_set:
             group = by_set[name]
-            block["label"] = f"Linked by {' and '.join(group['sources'])}: " + " + ".join(group["blocks"])
+            block["label"] = f"Linked by {' and '.join(group['sources'])} ({len(group['blocks'])} blocks)"
+            block["linked_from"] = group["blocks"]
     result["linked_blocks"] = info
     return result

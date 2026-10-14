@@ -18,6 +18,7 @@
 - `scan` writes `variants.tsv`: one row per call, with effects alone, phase, block, splice flag, annotations, read allele counts and parent of origin.
 
 ### Changed
+- Report layout: an answer card shows the verdict from the calls alone, beside one row per evidence source with its own Apply button; relationships record every source that supports them. Agreement bars show direction and strength (e.g. "Opposite · 53 of 53"). Outcome cards group by protein pair, and the sidebar scrolls on its own. In the scan table, the gene and transcript share a cell, protein changes come first, and evidence verdicts sit beside them.
 - The redesigned report leads with a protein-level verdict and shows the two copies side by side. Large analyses embed edits instead of sequences: 1.6 MB instead of 44 MB at the block cap.
 - GTF `stop_codon` features are joined to the CDS, so stop loss is assessed for GENCODE and Ensembl GTFs.
 - Transcript IDs resolve with or without version, and as GFF3/RefSeq IDs. Contig names may differ by a `chr` prefix.

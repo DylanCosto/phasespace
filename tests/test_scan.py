@@ -169,7 +169,7 @@ def test_variants_tsv_combines_effects_alone_and_evidence(tmp_path):
     # Alone each changes Asn100 differently; both came from the mother, so one copy carries both (p.Asn100Glu).
     assert (first["coding_change"], first["protein_change_alone"], first["parent_of_origin"]) == ("c.298A>G", "p.Asn100Asp", "father:A mother:G")
     assert (second["coding_change"], second["protein_change_alone"], second["parent_of_origin"]) == ("c.300C>A", "p.Asn100Lys", "father:C mother:A")
-    assert first["block"] == second["block"] == "Linked by parents and reads"
+    assert first["block"] == second["block"] == "Linked by parents and reads (20 blocks)"
     genes = {row["gene"]: row for row in csv.DictReader(open(out / "scan.tsv"), delimiter="\t")}
     assert "p.Asn100Glu" in genes["SIRPA"]["protein_changes"].split("; ")
     assert rows["chr20:145669:ACC>A"]["block"] == "both copies" and rows["chr20:145669:ACC>A"]["info_platforms"] == "5"

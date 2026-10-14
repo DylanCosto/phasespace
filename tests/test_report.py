@@ -270,3 +270,23 @@ assert.ok(spots.some(s => s.row === -1));
 assert.ok(spots.every((s, i) => s.left >= 0 && s.left + items[i].width <= 1000));
 """
     subprocess.run(["node", "-e", test, str(javascript)], check=True, capture_output=True, text=True)
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="Node is needed for browser logic test")
+def test_relationship_sources_merge_and_withdraw_and_outcomes_group_by_protein():
+    javascript = Path(__file__).parents[1] / "src" / "phasespace" / "assets" / "report.js"
+    test = r"""
+const assert = require('node:assert/strict');
+const core = require(process.argv[1]);
+let list = core.mergeConstraint([], {a: 'b1', b: 'b2', parity: 1, sources: ['reads']});
+list = core.mergeConstraint(list, {a: 'b2', b: 'b1', parity: 1, sources: ['parents']});
+assert.deepEqual(list, [{a: 'b1', b: 'b2', parity: 1, sources: ['reads', 'parents']}]);
+assert.deepEqual(core.withdrawSource(list, 'reads'), [{a: 'b1', b: 'b2', parity: 1, sources: ['parents']}]);
+assert.deepEqual(core.withdrawSource(core.withdrawSource(list, 'reads'), 'parents'), []);
+// A hypothesis in the opposite direction replaces the evidence relationship.
+assert.deepEqual(core.mergeConstraint(list, {a: 'b1', b: 'b2', parity: 0, sources: ['hypothesis']}), [{a: 'b1', b: 'b2', parity: 0, sources: ['hypothesis']}]);
+assert.equal(list[0].sources.length, 2);  // Inputs are not mutated.
+const scenarios = [{id: 1, outcome_key: 'x', protein_outcome_key: 'P'}, {id: 2, outcome_key: 'y', protein_outcome_key: 'P'}, {id: 3, outcome_key: 'z', protein_outcome_key: 'Q'}, {id: 4, outcome_key: 'w'}];
+assert.deepEqual(core.groupByProtein(scenarios).map(g => g.map(s => s.id)), [[1, 2], [3], [4]]);
+"""
+    subprocess.run(["node", "-e", test, str(javascript)], check=True, capture_output=True, text=True)

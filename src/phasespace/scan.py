@@ -51,8 +51,7 @@ def _safe(name: str) -> str:
 def _variant_rows(row: dict, locus, result: dict | None) -> list[dict]:
     """One row per called coding variant, with effects alone and any evidence."""
     analysed = {v["id"]: v for v in (result or {}).get("variants", [])}
-    labels = {block["id"]: (block["label"].split(":", 1)[0] if block["label"].startswith("Linked by") else block["label"])
-              for block in (result or {}).get("blocks", [])}
+    labels = {block["id"]: block["label"] for block in (result or {}).get("blocks", [])}
     splice = {hit["id"]: hit for hit in locus.splice_region}
     reads = (result or {}).get("read_evidence", {}).get("variants", {})
     origin = (result or {}).get("inheritance_evidence", {}).get("variants", {})
