@@ -132,6 +132,42 @@ def _project(start: int, end: int, ref: str, alleles: tuple[str, str], transcrip
     raise PhaseSpaceError(f"Variant at {transcript.contig}:{start + 1} crosses a CDS boundary. Only edits wholly inside one CDS segment are supported.")
 
 
+SPLICE_EXON_BASES, SPLICE_INTRON_BASES = 3, 8
+
+
+def _splice_windows(intervals: tuple[tuple[int, int], ...]) -> list[tuple[int, int, int, str]]:
+    """Splice-region windows at junctions between coding exons, as
+    (start, end, junction, side): 3 exonic and 8 intronic bases per junction,
+    following the Sequence Ontology splice_region_variant definition."""
+    windows = []
+    for (_, left_end), (right_start, _) in zip(intervals, intervals[1:]):
+        windows += [(left_end - SPLICE_EXON_BASES, left_end, left_end, "exon"),
+                    (left_end, left_end + SPLICE_INTRON_BASES, left_end, "intron"),
+                    (right_start - SPLICE_INTRON_BASES, right_start, right_start, "intron"),
+                    (right_start, right_start + SPLICE_EXON_BASES, right_start, "exon")]
+    return windows
+
+
+def _splice_hit(record: object, call: object, ref: str, windows: list[tuple[int, int, int, str]], location: str,
+                min_gq: float, min_dp: int) -> dict | None:
+    """Describe a passing alternate call that overlaps a splice-region window."""
+    start, end = record.start, record.start + len(ref)
+    hits = [(junction, side) for left, right, junction, side in windows if start < right and end > left]
+    gt = call.get("GT")
+    if not hits or gt is None or len(gt) != 2 or None in gt or not any(value > 0 for value in gt):
+        return None
+    alleles = [(record.alleles[value] or "").upper() for value in gt]
+    if any(not _BASES.fullmatch(allele) for allele in alleles) or _quality(record, call, min_gq, min_dp, False)[0]:
+        return None
+    junction = min(hits, key=lambda hit: min(abs(start - hit[0]), abs(end - hit[0])))[0]
+    # Bases from the junction: the last exonic and first intronic base are both 1.
+    distance = junction - end + 1 if end <= junction else start - junction + 1 if start >= junction else 1
+    return {"id": f"{location}:{ref}>{','.join(sorted(set(alleles) - {ref}))}", "pos": start, "ref": ref,
+            "alleles": alleles, "gt": list(gt), "phased": bool(call.phased),
+            "where": "exon and intron" if {side for _, side in hits} == {"exon", "intron"} else hits[0][1],
+            "junction": junction, "distance": distance}
+
+
 def _deleted_tail(start: int, ref: str, alleles: Iterable[str]) -> tuple[int, int] | None:
     """Return the reference bases removed by the shortest called deletion allele."""
     tails = []
@@ -368,6 +404,8 @@ class LocusReader:
         if len({contig, fasta_contig, vcf_contig}) > 1:
             warnings.append(f"Contig names differ between inputs (annotation {contig!r}, reference {fasta_contig!r}, VCF {vcf_contig!r}); they were matched by their chr prefix.")
         transcript = Transcript(model.id, gene, vcf_contig, strand, intervals, reference_cds)
+        windows = _splice_windows(intervals)
+        splice_region: list[dict] = []
         records = self._records(vcf_contig, intervals[0][0], intervals[-1][1], warnings)
         try:
             for record in records:
@@ -378,6 +416,10 @@ class LocusReader:
                 ref_end = start + len(ref)
                 span_end = max(ref_end, record.stop)
                 clips = list(_clips(start, span_end, intervals))
+                if windows and any(start < right and start + len(ref) > left for left, right, _, _ in windows):
+                    hit = _splice_hit(record, record.samples[sample], ref, windows, f"{vcf_contig}:{start + 1}", min_gq, min_dp)
+                    if hit:
+                        splice_region.append(hit)
                 if not clips:
                     continue
                 location = f"{vcf_contig}:{start + 1}"
@@ -469,7 +511,10 @@ class LocusReader:
         evidence = _merge_evidence(_without_deleted_tails(raw_evidence, deleted_tails), intervals)
         if any(item.status == "unknown" for item in evidence):
             warnings.append("Some CDS bases lack usable genotype evidence. An unchanged predicted copy is reference-identical only with respect to included calls; additional variants may be unobserved.")
-        return Locus(transcript, sample, variants, evidence, list(dict.fromkeys(warnings)), self.source)
+        if splice_region:
+            count = len(splice_region)
+            warnings.append(f"{count} called variant{'s lie' if count != 1 else ' lies'} in a splice region (within {SPLICE_EXON_BASES} exonic or {SPLICE_INTRON_BASES} intronic bases of a coding-exon junction). Effects on splicing are not modelled.")
+        return Locus(transcript, sample, variants, evidence, list(dict.fromkeys(warnings)), self.source, splice_region)
 
 
 def load_locus(vcf_path: str | Path, fasta_path: str | Path, annotation_path: str | Path,

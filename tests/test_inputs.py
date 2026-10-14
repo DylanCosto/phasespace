@@ -571,3 +571,25 @@ def test_refcall_on_a_variant_genotype_still_excludes_it(files):
     locus = load(files, [row(16, "A", "T", gt="0/1", filt="RefCall")])
     assert not locus.variants
     assert any("FILTER=RefCall" in w for w in locus.warnings)
+
+
+def test_splice_region_calls_are_flagged_not_modelled(files):
+    # Coding exons [12,18) and [30,39): junctions at 18 and 30.
+    calls = [row(5, "A", "G"), row(17, "A", "G"), row(21, "A", "G"), row(28, "A", "C", values="0/1:5:12"), row(29, "A", "T", gt="1/1")]
+    locus = load(files, calls)
+    hits = {hit["id"]: (hit["where"], hit["distance"], hit["junction"]) for hit in locus.splice_region}
+    assert hits == {"chr1:17:A>G": ("exon", 2, 18), "chr1:21:A>G": ("intron", 3, 18), "chr1:29:A>T": ("intron", 2, 30)}
+    assert [v.id for v in locus.variants] == ["chr1:17:A>G"]  # Coding consequence still modelled.
+    assert any("3 called variants lie in a splice region" in w for w in locus.warnings)
+    from phasespace.analysis import analyze
+    result = analyze(locus)
+    assert len(result["splice_region"]) == 3 and result["summary"]["splice_region"] == 3
+
+
+def test_single_exon_transcript_has_no_splice_region(files):
+    reference, annotation, write = files
+    annotation.write_text('chr1\ttest\tCDS\t31\t39\t.\t+\t0\tgene_id "G"; transcript_id "TX";\n')
+    reference.write_text(reference.read_text().replace("CCCGGGTAA", "ATGGGGTAA"))
+    Path(str(reference) + ".fai").unlink()
+    pysam.faidx(str(reference))
+    assert load_locus(write([row(29, "A", "T"), row(31, "A", "G")]), reference, annotation, "TX").splice_region == []

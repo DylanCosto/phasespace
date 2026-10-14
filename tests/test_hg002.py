@@ -177,3 +177,10 @@ def test_ensembl_contig_names_without_chr_prefix(tmp_path):
     assert locus.variants[0].id == "chr20:47651092:ACAG>A"
     assert any("Contig names differ" in w for w in locus.warnings)
     assert locus.evidence == load("pacbio", GTF, "ENST00000371998.8").evidence
+
+
+def test_real_exonic_splice_region_call_in_sirpa():
+    locus = load("trio", GTF, "ENST00000358771.5")
+    hit = next(hit for hit in locus.splice_region if hit["id"] == "chr20:1915454:C>T")
+    assert (hit["where"], hit["distance"], hit["junction"]) == ("exon", 2, 1915455)  # Second-to-last exonic base.
+    assert any(v.id == hit["id"] for v in locus.variants)

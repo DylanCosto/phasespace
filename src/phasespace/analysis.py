@@ -386,6 +386,7 @@ def analyze(locus: Locus, max_blocks: int = 8) -> dict:
         "reference_first_stop": ref_first_stop,
         "reference_protein_length": len(ref_protein),
         "informative_pairs": _informative_pairs(blocks, scenarios),
+        "splice_region": list(locus.splice_region),
     }
     result["summary"] = summarize(result)
     return result
@@ -415,4 +416,5 @@ def summarize(result: dict) -> dict:
         "arrangements_keeping_reference_protein": sum(keeps),
         "changes": labels,
         "disruptive": disruptive,
+        "splice_region": len(result.get("splice_region", [])),
     }

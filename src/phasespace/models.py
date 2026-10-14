@@ -45,6 +45,8 @@ class Locus:
     evidence: list[Evidence]
     warnings: list[str] = field(default_factory=list)
     source: str = ""
+    # Passing calls near coding-exon junctions; splicing effects are not modelled.
+    splice_region: list[dict] = field(default_factory=list)
 
 
 class PhaseSpaceError(ValueError):

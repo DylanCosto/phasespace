@@ -100,7 +100,7 @@ The first CDS phase must be zero, subsequent CDS phases must agree, and joined C
 
 The default cap is eight independent heterozygous blocks (at most 128 arrangements after exchanging the two copy labels). `--max-blocks` can raise this to twelve. Larger problems stop with an error; scenarios are never silently sampled or truncated. The report has no scenario probabilities. Phased genotypes without `PS` share an implicit phase set as specified by VCF; different explicit phase sets remain independently oriented.
 
-Splicing, structural variants, copy-number changes, mitochondrial genetic codes, recoded amino acids such as selenocysteine, protein-domain annotation, nonsense-mediated decay, expression, and clinical pathogenicity are outside this version's model. Explicit nonstandard translation annotations are rejected. The tool does not perform phasing or establish a diagnosis.
+Splicing effects are not modelled. Instead, passing calls within 3 exonic or 8 intronic bases of a junction between coding exons are flagged as splice-region variants in reports and scans, so a reference-protein verdict is never read as clearing them. Structural variants, copy-number changes, mitochondrial genetic codes, recoded amino acids such as selenocysteine, protein-domain annotation, nonsense-mediated decay, expression, and clinical pathogenicity are outside this version's model. Explicit nonstandard translation annotations are rejected. The tool does not perform phasing or establish a diagnosis.
 
 ## Privacy and reproducibility
 

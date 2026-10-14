@@ -26,7 +26,7 @@ from .report import _script_json, write_report
 
 TIERS = {1: "Phase decides", 2: "No reference protein, disruptive", 3: "No reference protein", 4: "Reference protein kept"}
 COLUMNS = ["tier", "gene", "transcript", "selection", "contig", "verdict", "variants", "heterozygous", "phased",
-           "blocks", "arrangements", "protein_outcomes", "changes", "disruptive", "unknown_cds_bases",
+           "blocks", "arrangements", "protein_outcomes", "changes", "disruptive", "splice_region", "unknown_cds_bases",
            "cds_bases", "status", "report"]
 
 _worker: dict = {}
@@ -54,7 +54,8 @@ def _scan_one(model: TranscriptModel) -> dict:
     row.update(contig=locus.transcript.contig, variants=len(variants),
                heterozygous=sum(v.gt[0] != v.gt[1] for v in variants),
                phased=sum(v.phased and v.gt[0] != v.gt[1] for v in variants),
-               unknown_cds_bases=sum(e.end - e.start for e in locus.evidence if e.status == "unknown"))
+               unknown_cds_bases=sum(e.end - e.start for e in locus.evidence if e.status == "unknown"),
+               splice_region=len(locus.splice_region))
     if not variants:
         return {**row, "tier": 4, "verdict": "good", "status": "no called coding variants"}
     try:
@@ -124,7 +125,7 @@ def run_scan(vcf: str, fasta: str, annotation: str, out_dir: str | Path, *, samp
                 if index % 2000 == 0:
                     log(f"  {index:,} / {len(models):,}")
     rows.sort(key=lambda row: (row["tier"], -len(row.get("disruptive", "") or ""), row["gene"]))
-    shown = [row for row in rows if row.get("variants") or row["tier"] == 5]
+    shown = [row for row in rows if row.get("variants") or row.get("splice_region") or row["tier"] == 5]
     with open(out_dir / "scan.tsv", "w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, COLUMNS, delimiter="\t", extrasaction="ignore", restval="")
         writer.writeheader()

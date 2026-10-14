@@ -108,6 +108,7 @@
         const pills = element("div", "change-pills");
         const disruptive = (row.disruptive || "").split(",");
         (row.changes || "").split(",").filter(Boolean).forEach(function (key) { pills.append(element("span", disruptive.indexOf(key) >= 0 ? "disruptive" : "", LABELS[key] || key)); });
+        if (Number(row.splice_region)) pills.append(element("span", "splice", "Splice region ×" + row.splice_region));
         if (!pills.children.length) pills.append(element("span", "", "Synonymous only"));
         changes.append(pills);
       }
